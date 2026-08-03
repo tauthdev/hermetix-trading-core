@@ -9,6 +9,16 @@
 3. **안전 우선** — 공매도 방지(매도 클램프), 주문 멱등성(clientOrderId), 연속 실패 시 자동 정지. 모의투자라도 폭주하는 봇은 커뮤니티 신뢰를 깎는다
 4. **호스트 앱을 오염시키지 않는다** — 코어의 Jackson 설정, 스케줄러 스레드는 전부 내부 전용. 앱의 전역 빈을 건드리지 않는다 (0.2.1 에서 ObjectMapper 빈 노출을 제거한 이유)
 
+## 모듈 구조 (0.5.0+)
+
+```
+hermetix-broker   <- 연결 계층 (CCXT 역할): BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
+                     Spring 컨테이너 없이도 사용 가능 (어댑터는 일반 생성자 주입)
+hermetix-engine   <- 전략 계층: 전략 SPI + 실행 엔진 + PnL + 자동설정 (broker 에 api 의존)
+```
+
+의존성 좌표: `com.github.tauthdev.hermetix-trading-core:hermetix-engine` (봇) 또는 `:hermetix-broker` (연결만).
+
 ## 컴포넌트 맵
 
 ```
@@ -115,14 +125,18 @@ tick(strategy):
 | 비상정지 플래그, 연속 실패 카운터 | 메모리 (TradingGuard) | 초기화 (정지 해제됨) |
 | 전략 내부 상태 (진입 시각, 감쇠 카운터 등) | 메모리 (전략 필드) | **소실** — 전략이 서버 상태로 복원하는 패턴 권장 |
 
-## 에러 처리 계층
+## 에러 처리 계층 (0.5.0+)
+
+어댑터는 브로커별 에러를 타입화된 계층으로 매핑하고, 엔진은 타입별로 반응한다:
 
 ```
-서버 에러 응답 {"error":{type,code,message,...}}
- → NextApiClient 가 파싱 → NextApiException(httpStatus, error) throw
-    ├─ isAuthError → 토큰 재발급 1회 재시도 (클라이언트 계층에서 흡수)
-    ├─ 전략 틱 안에서 발생 → 틱 실패로 기록 → guard 카운트
-    └─ 시그널 실행 중 발생 → 해당 시그널만 실패 로그, 다음 시그널 계속
+BrokerApiException (기반)
+ |- AuthError               -> 어댑터가 토큰 재발급 후 재시도 (넥스트), 소진 시 틱 실패
+ |- RateLimitError          -> 어댑터가 백오프 재시도, 소진 시 틱 스킵 (비상정지 카운트 제외)
+ |- MarketClosedError       -> 틱 조용히 스킵 (비상정지 카운트 제외 - KRX 합성 캘린더의 공휴일 케이스 포함)
+ |- InsufficientFundsError  -> 해당 시그널만 스킵
+ |- InvalidOrderError       -> 시그널 실패 로그
+ |- OrderNotFoundError      -> 호출부 판단
 ```
 
 ## 브로커 어댑터

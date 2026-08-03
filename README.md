@@ -11,6 +11,7 @@
 | `kiwoom` | 키움증권 모의투자 | KRX 국내주식 | 1d | 레이트리밋 쓰로틀/재시도 내장 |
 
 전략 코드는 브로커와 무관합니다 — 설정만 바꾸면 같은 전략이 다른 증권사에서 돕니다.
+브로커별 지원 기능은 코드(`BrokerCapabilities`)로 선언되며, 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
 (KRX 브로커는 일봉만 지원하므로 시간봉 전략은 `candleInterval` 을 DAY_1 로 조정하세요)
 
 ```yaml
@@ -45,7 +46,10 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.tauthdev:hermetix-trading-core:0.4.0")
+    // 전략 봇: engine (broker 가 함께 딸려옴)
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.0")
+    // 봇 없이 연결 계층만 필요하면 (시세 수집, 대시보드 등):
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.0")
 }
 ```
 
