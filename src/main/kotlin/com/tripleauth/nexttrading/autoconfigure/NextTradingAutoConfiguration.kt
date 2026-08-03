@@ -20,15 +20,14 @@ import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.annotation.Bean
 
 @AutoConfiguration
 @EnableConfigurationProperties(NextApiProperties::class, NextEngineProperties::class, NextPnlProperties::class)
 class NextTradingAutoConfiguration {
 
-    @Bean
-    fun nextTradingObjectMapper(): ObjectMapper = ObjectMapper()
+    // 앱의 전역 Jackson 설정을 건드리지 않도록 빈으로 노출하지 않는다 (API 통신 전용)
+    private val objectMapper: ObjectMapper = ObjectMapper()
         .registerModule(kotlinModule())
         .registerModule(JavaTimeModule())
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
@@ -36,18 +35,13 @@ class NextTradingAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    fun tokenManager(
-        properties: NextApiProperties,
-        @Qualifier("nextTradingObjectMapper") objectMapper: ObjectMapper,
-    ): TokenManager = TokenManager(properties, objectMapper)
+    fun tokenManager(properties: NextApiProperties): TokenManager =
+        TokenManager(properties, objectMapper)
 
     @Bean
     @ConditionalOnMissingBean
-    fun nextApiClient(
-        properties: NextApiProperties,
-        tokenManager: TokenManager,
-        @Qualifier("nextTradingObjectMapper") objectMapper: ObjectMapper,
-    ): NextApiClient = NextApiClient(properties, tokenManager, objectMapper)
+    fun nextApiClient(properties: NextApiProperties, tokenManager: TokenManager): NextApiClient =
+        NextApiClient(properties, tokenManager, objectMapper)
 
     @Bean
     @ConditionalOnMissingBean
