@@ -7,7 +7,7 @@ plugins {
     `maven-publish`
 }
 
-group = "com.github.hanaset"
+group = "com.github.tauthdev"
 version = "0.1.0"
 
 java {
