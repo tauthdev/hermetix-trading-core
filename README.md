@@ -1,41 +1,48 @@
-# hermetix-trading-core
+<div align="center">
 
-모의투자 **자동매매 전략 프레임워크**. 전략 한 번 작성하면 증권사는 설정으로 갈아끼웁니다.
+# Hermetix
+
+**증권사 모의투자 통합 트레이딩 프레임워크**
+
+전략은 한 번만 작성하세요. 증권사는 설정 한 줄로 갈아끼웁니다.
+
+[![JitPack](https://jitpack.io/v/tauthdev/hermetix-trading-core.svg)](https://jitpack.io/#tauthdev/hermetix-trading-core)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F.svg?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+
+[전략 작성 가이드](docs/strategy-guide.md) · [아키텍처](docs/architecture.md) · [로드맵](ROADMAP.md) · [기여하기](CONTRIBUTING.md)
+
+</div>
+
+---
+
+[CCXT](https://github.com/ccxt/ccxt) 가 크립토 거래소를 통일했듯, Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이스로 통일합니다. 여기에 전략 실행 엔진까지 얹어서, `TradingStrategy` 인터페이스 하나만 구현하면 자동매매 봇이 완성됩니다.
 
 ## 지원 브로커
 
-| `hermetix.broker` | 증권사 | 시장 | 캔들 지원 | 비고 |
-|---|---|---|---|---|
-| `next` (기본) | 넥스트증권 모의투자 | 미국주식 | 1m/5m/1h/1d | |
-| `kis` | 한국투자증권 모의투자 | KRX 국내주식 | 1d | 레이트리밋 쓰로틀/재시도 내장 |
-| `kiwoom` | 키움증권 모의투자 | KRX 국내주식 | 1d | 레이트리밋 쓰로틀/재시도 내장 |
+| | ID | 증권사 | 시장 | 캔들 | 상태 |
+|:---:|---|---|---|---|:---:|
+| <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 5m · 1h · 1d | ✅ 검증 |
+| <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ 검증 |
+| <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ 검증 |
+| <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://corp.tossinvest.com/ko/open-api) | — | — | ⏳ API 샌드박스 출시 대기 |
 
-전략 코드는 브로커와 무관합니다 — 설정만 바꾸면 같은 전략이 다른 증권사에서 돕니다.
-브로커별 지원 기능은 코드(`BrokerCapabilities`)로 선언되며, 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
-(KRX 브로커는 일봉만 지원하므로 시간봉 전략은 `candleInterval` 을 DAY_1 로 조정하세요)
+✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 어댑터.
+브로커별 지원 기능은 [`BrokerCapabilities`](hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며, 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
+새 브로커를 원하시면 [이슈로 요청](../../issues)해주세요 — 어댑터 기여 방법은 [아키텍처 문서](docs/architecture.md#브로커-어댑터)에 있습니다.
 
-```yaml
-# 한국투자증권 모의투자로 실행할 때
-hermetix:
-  broker: kis
-  kis:
-    appkey: ${KIS_APPKEY:}
-    appsecret: ${KIS_APPSECRET:}
-    cano: ${KIS_CANO:}        # 모의계좌번호 8자리
+## 왜 Hermetix 인가
 
-# 키움 모의투자로 실행할 때
-hermetix:
-  broker: kiwoom
-  kiwoom:
-    appkey: ${KIWOOM_APPKEY:}
-    secretkey: ${KIWOOM_SECRETKEY:}
-```
+- **브로커 독립 전략** — 같은 전략 코드가 넥스트증권(미국)과 한국투자·키움(KRX)에서 그대로 돕니다
+- **전략 = 클래스 하나** — 인증, 시세/계좌 조회, 주문 실행, 체결 추적은 전부 코어가 처리합니다
+- **소프트웨어 브라켓** — `Signal.Buy(takeProfitPrice=…, stopLossPrice=…)` 한 줄로 익절/손절 자동화
+- **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단)
+- **레이트리밋 내장** — 증권사별 요청 제한을 어댑터가 쓰로틀/백오프로 흡수합니다
+- **수익률 기본 제공** — `GET /pnl` 엔드포인트와 주기 PnL 로그가 모든 봇에 자동 포함됩니다
+- **타입화된 에러** — `MarketClosedError`, `RateLimitError`, `InsufficientFundsError`… 어느 브로커든 같은 방식으로 처리합니다
 
-전략 작성자는 `TradingStrategy` 인터페이스 하나만 구현하면 됩니다. 인증(OAuth 토큰 관리), 시세/계좌 조회, 주문 실행, 체결 추적, 익절/손절 관리, 장 운영시간 체크, 비상정지는 전부 코어가 처리합니다.
-
-## 빠른 시작
-
-### 1. 의존성 추가 (JitPack)
+## 설치
 
 ```kotlin
 // settings.gradle.kts
@@ -46,60 +53,51 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    // 전략 봇: engine (broker 가 함께 딸려옴)
+    // 전략 봇: engine (연결 계층이 함께 딸려옴)
     implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.1")
-    // 봇 없이 연결 계층만 필요하면 (시세 수집, 대시보드 등):
+
+    // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
     // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.1")
 }
 ```
 
-### 2. 설정
+## 빠른 시작 — 전략 봇
+
+> 처음이라면 [hermetix-strategy-template](https://github.com/tauthdev/hermetix-strategy-template) 을 "Use this template" 으로 복제하는 게 가장 빠릅니다.
 
 ```yaml
 # application.yml
 hermetix:
-  broker: next                   # 사용할 증권사 어댑터 (현재: next)
+  broker: next                   # next | kis | kiwoom
   next:
-    client-id: pk_test_...       # 넥스트증권 모의투자 API 키
+    client-id: pk_test_...
     client-secret: sk_test_...
     account-id: acc_main
-  engine:
-    max-consecutive-failures: 5  # 연속 실패 시 비상정지 임계치
 ```
-
-> API 키는 커밋하지 마세요. `application-local.yml`(gitignore) 또는 환경변수를 사용하세요.
-
-### 3. 전략 작성
 
 ```kotlin
 @Component
-class MyFirstStrategy : TradingStrategy {
+class MyStrategy : TradingStrategy {
 
     override val spec = StrategySpec(
         name = "my-first",
         symbols = listOf("AAPL"),
         candleInterval = CandleInterval.DAY_1,
         candleLimit = 20,
-        pollInterval = Duration.ofSeconds(60),
     )
 
     override fun decide(context: StrategyContext): List<Signal> {
-        val candles = context.candles("AAPL")
-        if (candles.size < 20) return emptyList()
-
         val price = context.quote("AAPL")?.price ?: return emptyList()
-        val ma20 = candles.takeLast(20).map { it.close }
-            .reduce(BigDecimal::add)
-            .divide(BigDecimal(20), 4, RoundingMode.HALF_EVEN)
+        val ma20 = context.candles("AAPL").map { it.close }
+            .reduce(BigDecimal::add).divide(BigDecimal(20), 4, RoundingMode.HALF_EVEN)
 
-        // 20일선 상향 돌파 시 매수 + 익절/손절을 함께 예약
         if (price > ma20 && !context.hasPosition("AAPL") && !context.hasOpenOrder("AAPL")) {
             return listOf(
                 Signal.Buy(
                     symbol = "AAPL",
                     quantity = BigDecimal.ONE,
-                    takeProfitPrice = price.multiply(BigDecimal("1.04")),
-                    stopLossPrice = price.multiply(BigDecimal("0.98")),
+                    takeProfitPrice = price.multiply(BigDecimal("1.04")),  // 익절/손절은
+                    stopLossPrice = price.multiply(BigDecimal("0.98")),    // 코어가 자동 실행
                 ),
             )
         }
@@ -108,67 +106,93 @@ class MyFirstStrategy : TradingStrategy {
 }
 ```
 
-`@SpringBootApplication` 으로 실행하면 엔진이 전략 빈을 자동으로 찾아 스케줄링합니다.
+`@SpringBootApplication` 으로 실행하면 엔진이 전략 빈을 찾아 해당 시장의 정규장 시간에만 호출합니다.
+
+증권사를 바꿀 땐 설정만 수정합니다:
+
+```yaml
+hermetix:
+  broker: kis                    # 이 한 줄이 전부
+  kis:
+    appkey: ${KIS_APPKEY:}
+    appsecret: ${KIS_APPSECRET:}
+    cano: ${KIS_CANO:}           # 모의계좌번호 8자리
+
+# 키움이라면
+#  broker: kiwoom
+#  kiwoom:
+#    appkey: ${KIWOOM_APPKEY:}
+#    secretkey: ${KIWOOM_SECRETKEY:}
+```
+
+## 빠른 시작 — 연결 계층만 (CCXT 스타일)
+
+봇이 필요 없다면 `hermetix-broker` 만으로 통일 API 를 사용할 수 있습니다. Spring 컨테이너도 필요 없습니다:
+
+```kotlin
+val broker: BrokerClient = KisApiClient(
+    KisApiProperties(appkey = "...", appsecret = "...", cano = "..."),
+    objectMapper,
+)
+
+broker.getQuotes(listOf("005930")).quotes[0].price    // 삼성전자 현재가
+broker.getCandles("005930", CandleInterval.DAY_1, 30) // 일봉 30개
+broker.getHoldings()                                  // 보유 포지션
+```
+
+브로커를 `NextApiClient` 나 `KiwoomApiClient` 로 바꿔도 **호출 코드는 동일**합니다 — 응답의 방언(부호 접두, zero-padding, TR-ID 체계)은 어댑터가 전부 정규화합니다.
 
 ## 동작 방식
 
-- 엔진은 `pollInterval` 주기로 전략을 호출합니다. 기본적으로 **해당 브로커 시장의 정규장 시간에만** 호출됩니다 (next=미국장 ET, kis/kiwoom=KRX KST. `regularHoursOnly = false` 로 해제 가능)
-- 매 틱마다 시세/캔들/계좌/보유/미체결 스냅샷(`StrategyContext`)을 만들어 전달합니다
-- 전략이 반환한 `Signal` 은 엔진이 순서대로 실행합니다
-  - `Signal.Buy` 에 `takeProfitPrice`/`stopLossPrice` 를 지정하면 체결 후 코어가 가격을 감시하다 자동 청산합니다 (**소프트웨어 브라켓** — 서버가 네이티브 BRACKET 주문을 지원하면 교체 예정)
-  - `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지)
-  - 모든 주문에 `{전략이름}-{uuid}` 형식의 `clientOrderId` 가 부여됩니다 (24시간 중복 방지)
-- 연속 실패가 임계치에 도달하면 **비상정지**: 미체결 전량 취소 + 신규 주문 차단 (`TradingGuard.resume()` 으로 해제)
+```
+전략 (TradingStrategy)          ← 당신이 작성하는 유일한 부분
+    ↓ Signal (Buy/Sell/Cancel)
+StrategyEngine                  ← 정규장 스케줄링, 컨텍스트 구성, 브라켓/비상정지
+    ↓ BrokerClient 인터페이스
+next / kis / kiwoom 어댑터       ← 인증, 레이트리밋, 방언 정규화
+```
 
-## 규약
-
-- 전략 안에서 API 를 직접 호출하거나 스레드를 만들지 않습니다 — 필요한 데이터는 `StrategyContext` 로 공급됩니다
-- 전략 상태는 클래스 필드에 보관합니다 (인스턴스는 재사용됨). 단, 앱 재시작 시 소프트웨어 브라켓 상태는 사라지므로 `decide()` 에서 보유 포지션을 점검하는 로직을 두는 것을 권장합니다
+- 엔진은 `pollInterval` 주기로 전략을 호출합니다 — 해당 브로커 시장의 정규장에만 (next=미국장 ET, kis/kiwoom=KRX KST)
+- `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지)
+- 익절/손절(소프트웨어 브라켓)은 앱 메모리에서 관리됩니다 — 재시작 시 사라지므로 [전략 가이드](docs/strategy-guide.md)의 복원 패턴을 참고하세요
+- 연속 실패가 임계치(기본 5회)에 도달하면 비상정지 — 미체결 전량 취소 후 주문 차단 (휴장·레이트리밋은 카운트 제외)
 
 ## 수익률 확인
 
-전략 앱을 띄우면 두 가지가 기본 제공됩니다:
+봇을 띄우면 자동으로 제공됩니다:
 
-- **`GET /pnl`** — 계좌 총평가/현금/평가손익/종목별 손익 JSON (`curl localhost:8080/pnl`)
-- **주기 로그** — 기본 60분마다 `PNL / portfolio=... unrealized=+... | AAPL +54.32(+9.64%)` 형식으로 로그 출력
+- **`GET /pnl`** — 총평가/현금/평가손익/종목별 손익 JSON
+- **주기 로그** — `PNL / portfolio=21363.45 unrealized=+271.73 | AAPL +54.32(+9.64%) …`
 
 ```yaml
 hermetix:
   pnl:
-    log-interval-minutes: 60   # 로그 주기 (enabled: false 로 끔)
+    log-interval-minutes: 60
     initial-capital: 20000     # 설정하면 총수익률(return=%)도 계산
 ```
 
-## 넥스트증권(next) 어댑터 API 커버리지 (2026-08 기준)
+## 공식 전략
 
-다른 브로커의 어댑터별 특성은 [아키텍처 문서](docs/architecture.md)의 어댑터 비교표를 보세요.
+| 레포 | 전략 | 특징 |
+|---|---|---|
+| [hermetix-strategy-template](https://github.com/tauthdev/hermetix-strategy-template) | 이동평균 예제 | **여기서 시작하세요** |
+| [hermetix-larry-strategy](https://github.com/tauthdev/hermetix-larry-strategy) | 변동성 돌파 | 캔들 분석 + 손절 브라켓 |
+| [hermetix-trend-breakout-strategy](https://github.com/tauthdev/hermetix-trend-breakout-strategy) | WMA 추세선 돌파 | 지표 계산 + 익절/손절 브라켓 |
+| [hermetix-grid-strategy](https://github.com/tauthdev/hermetix-grid-strategy) | 목표가 스캘핑 | 지정가/취소 컨트롤, KRX 호환 |
 
-| 기능 | 상태 |
-|---|---|
-| 토큰 발급/자동 갱신, 시세/캔들/캘린더/환율/종목, 계좌/보유/매수가능금액, 주문 생성·조회·취소, preview, 체결 내역 | ✅ 지원 |
-| 고급 주문(STOP/BRACKET/OCO), modify, cancel-all, kill-switch, 거래한도 | ⏳ 서버 미배포 — 익절/손절은 소프트웨어 브라켓으로 대체 중 |
-
-## 문서
-
-- **[전략 작성 가이드](docs/strategy-guide.md)** — SPI 상세 레퍼런스, 패턴, 테스트, 트러블슈팅
-- **[코어 아키텍처](docs/architecture.md)** — 내부 동작: 컴포넌트 맵, 틱 파이프라인, 상태 지도, 설계 결정
-- [기여 가이드](CONTRIBUTING.md)
-
-## 시작하기 / 공식 전략
-
-| 레포 | 설명 |
-|---|---|
-| [next-strategy-template](https://github.com/tauthdev/next-strategy-template) | **여기서 시작하세요** — "Use this template" 으로 전략 개발 시작 |
-| [next-larry-strategy](https://github.com/tauthdev/next-larry-strategy) | 변동성 돌파 (평균 몸통 1.2배 양봉 진입) |
-| [next-trend-breakout-strategy](https://github.com/tauthdev/next-trend-breakout-strategy) | WMA 추세선 돌파 (가중 추세선 + 갭 돌파) |
-| [next-grid-strategy](https://github.com/tauthdev/next-grid-strategy) | 목표가 스캘핑 (딥 매수 → 목표 감쇠 매도) |
-
-## 커뮤니티 전략
-
-직접 만든 전략을 공유하려면 [전략 공유 이슈](../../issues/new?template=strategy-share.md)를 올려주세요. 이 목록에 추가됩니다.
+직접 만든 전략을 공유하려면 [전략 공유 이슈](../../issues/new?template=strategy-share.md)를 올려주세요.
 
 <!-- 커뮤니티 전략 목록 -->
 
+## 문서
+
+- [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스, 패턴, 테스트, 트러블슈팅
+- [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 어댑터 비교표, 상태 지도
+- [로드맵](ROADMAP.md) — CCXT 를 롤모델로 한 5단계 계획
+- [기여 가이드](CONTRIBUTING.md)
+
 ## 라이선스
 
-[MIT](LICENSE) — 이 프로젝트의 모든 것은 모의투자 학습용이며 투자 조언이 아닙니다.
+[MIT](LICENSE)
+
+> **면책**: 이 프로젝트의 모든 것은 모의투자 학습용이며 투자 조언이 아닙니다. 각 증권사 로고는 해당 회사의 자산이며, 지원 서비스를 표시하기 위해서만 사용됩니다.
