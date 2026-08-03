@@ -99,6 +99,26 @@ class MyFirstStrategy : TradingStrategy {
 | 토큰 발급/자동 갱신, 시세/캔들/캘린더/환율/종목, 계좌/보유/매수가능금액, 주문 생성·조회·취소, preview, 체결 내역 | ✅ 지원 |
 | 고급 주문(STOP/BRACKET/OCO), modify, cancel-all, kill-switch, 거래한도 | ⏳ 서버 미배포 — 익절/손절은 소프트웨어 브라켓으로 대체 중 |
 
-## 관련 프로젝트
+## 문서
 
-- `next-strategy-template` — 전략 개발 시작용 템플릿 (준비 중)
+- **[전략 작성 가이드](docs/strategy-guide.md)** — SPI 상세 레퍼런스, 패턴, 테스트, 트러블슈팅
+- [기여 가이드](CONTRIBUTING.md)
+
+## 시작하기 / 공식 전략
+
+| 레포 | 설명 |
+|---|---|
+| [next-strategy-template](https://github.com/tauthdev/next-strategy-template) | **여기서 시작하세요** — "Use this template" 으로 전략 개발 시작 |
+| [next-larry-strategy](https://github.com/tauthdev/next-larry-strategy) | 변동성 돌파 (평균 몸통 1.2배 양봉 진입) |
+| [next-trend-breakout-strategy](https://github.com/tauthdev/next-trend-breakout-strategy) | WMA 추세선 돌파 (가중 추세선 + 갭 돌파) |
+| [next-grid-strategy](https://github.com/tauthdev/next-grid-strategy) | 목표가 스캘핑 (딥 매수 → 목표 감쇠 매도) |
+
+## 커뮤니티 전략
+
+직접 만든 전략을 공유하려면 [전략 공유 이슈](../../issues/new?template=strategy-share.md)를 올려주세요. 이 목록에 추가됩니다.
+
+<!-- 커뮤니티 전략 목록 -->
+
+## 라이선스
+
+[MIT](LICENSE) — 이 프로젝트의 모든 것은 모의투자 학습용이며 투자 조언이 아닙니다.
