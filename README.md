@@ -17,7 +17,7 @@
 
 ---
 
-[CCXT](https://github.com/ccxt/ccxt) 가 크립토 거래소를 통일했듯, Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이스로 통일합니다. 여기에 전략 실행 엔진까지 얹어서, `TradingStrategy` 인터페이스 하나만 구현하면 자동매매 봇이 완성됩니다.
+Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이스로 통일합니다. 여기에 전략 실행 엔진까지 얹어서, `TradingStrategy` 인터페이스 하나만 구현하면 자동매매 봇이 완성됩니다.
 
 ## 지원 브로커
 
@@ -125,7 +125,7 @@ hermetix:
 #    secretkey: ${KIWOOM_SECRETKEY:}
 ```
 
-## 빠른 시작 — 연결 계층만 (CCXT 스타일)
+## 빠른 시작 — 연결 계층만
 
 봇이 필요 없다면 `hermetix-broker` 만으로 통일 API 를 사용할 수 있습니다. Spring 컨테이너도 필요 없습니다:
 
@@ -188,7 +188,7 @@ hermetix:
 
 - [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스, 패턴, 테스트, 트러블슈팅
 - [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 어댑터 비교표, 상태 지도
-- [로드맵](ROADMAP.md) — CCXT 를 롤모델로 한 5단계 계획
+- [로드맵](ROADMAP.md) — 5단계 발전 계획
 - [기여 가이드](CONTRIBUTING.md)
 
 ## 라이선스
