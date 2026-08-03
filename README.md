@@ -108,7 +108,7 @@ class MyFirstStrategy : TradingStrategy {
 
 ## 동작 방식
 
-- 엔진은 `pollInterval` 주기로 전략을 호출합니다. 기본적으로 **미국 정규장 시간에만** 호출됩니다 (`regularHoursOnly = false` 로 해제 가능)
+- 엔진은 `pollInterval` 주기로 전략을 호출합니다. 기본적으로 **해당 브로커 시장의 정규장 시간에만** 호출됩니다 (next=미국장 ET, kis/kiwoom=KRX KST. `regularHoursOnly = false` 로 해제 가능)
 - 매 틱마다 시세/캔들/계좌/보유/미체결 스냅샷(`StrategyContext`)을 만들어 전달합니다
 - 전략이 반환한 `Signal` 은 엔진이 순서대로 실행합니다
   - `Signal.Buy` 에 `takeProfitPrice`/`stopLossPrice` 를 지정하면 체결 후 코어가 가격을 감시하다 자동 청산합니다 (**소프트웨어 브라켓** — 서버가 네이티브 BRACKET 주문을 지원하면 교체 예정)
@@ -135,7 +135,9 @@ hermetix:
     initial-capital: 20000     # 설정하면 총수익률(return=%)도 계산
 ```
 
-## 현재 API 커버리지 (2026-08 기준)
+## 넥스트증권(next) 어댑터 API 커버리지 (2026-08 기준)
+
+다른 브로커의 어댑터별 특성은 [아키텍처 문서](docs/architecture.md)의 어댑터 비교표를 보세요.
 
 | 기능 | 상태 |
 |---|---|

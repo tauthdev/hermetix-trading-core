@@ -10,7 +10,7 @@
 앱 기동 → 전략 빈 발견 → 스케줄 등록
 매 틱:
   1. 비상정지 상태면 스킵
-  2. 장시간 체크 (regularHoursOnly=true 면 미국 정규장 09:30–16:00 ET 에만 진행)
+  2. 장시간 체크 (regularHoursOnly=true 면 브로커 시장의 정규장에만 진행 — next: 미국장 09:30–16:00 ET, kis/kiwoom: KRX 09:00–15:30 KST)
   3. StrategyContext 구성 (시세/캔들/계좌/보유/미체결 API 조회)
   4. 소프트웨어 브라켓 점검 (익절/손절 도달 시 자동 청산 — 전략 호출보다 우선)
   5. strategy.decide(context) 호출
@@ -147,7 +147,7 @@ assertThat(strategy.decide(context)).hasSize(1)
 | 증상 | 원인/해결 |
 |---|---|
 | 엔진이 전략을 안 찾음 | `@Component` 누락 또는 컴포넌트 스캔 범위 밖. "등록된 TradingStrategy 빈이 없습니다" 로그 확인 |
-| 틱이 전혀 안 돎 | 미국 정규장 시간이 아님 (`regularHoursOnly = false` 로 폐장 테스트 가능) |
+| 틱이 전혀 안 돎 | 브로커 시장의 정규장 시간이 아님 (`regularHoursOnly = false` 로 폐장 테스트 가능) |
 | 401 반복 | 키 오류. `NEXT_CLIENT_ID`/`NEXT_CLIENT_SECRET` 확인 |
 | 주문이 423 | 서버 킬 스위치 활성 상태 (문서상 — 현재 모의 서버엔 미배포) |
 | 갑자기 모든 주문 스킵 | 비상정지 발동. 로그에서 "TRADING HALTED" 검색, 원인 해결 후 재시작 |
