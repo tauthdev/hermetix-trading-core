@@ -116,6 +116,7 @@ next:
 ## 문서
 
 - **[전략 작성 가이드](docs/strategy-guide.md)** — SPI 상세 레퍼런스, 패턴, 테스트, 트러블슈팅
+- **[코어 아키텍처](docs/architecture.md)** — 내부 동작: 컴포넌트 맵, 틱 파이프라인, 상태 지도, 설계 결정
 - [기여 가이드](CONTRIBUTING.md)
 
 ## 시작하기 / 공식 전략

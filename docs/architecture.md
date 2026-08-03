@@ -1,0 +1,139 @@
+# 코어 아키텍처
+
+이 문서는 next-trading-core 의 **내부 동작**을 설명합니다. 전략을 작성하려면 [전략 작성 가이드](strategy-guide.md)를 보세요 — 이 문서는 코어에 기여하거나 동작을 깊이 이해하려는 사람을 위한 것입니다.
+
+## 설계 원칙
+
+1. **전략 작성자의 표면적 최소화** — 사용자가 만지는 것은 `TradingStrategy` / `StrategyContext` / `Signal` 세 타입뿐. 나머지는 전부 자동설정으로 숨긴다. 이 세 타입의 시그니처 변경은 모든 전략 레포를 깨뜨리므로 신중히 다룬다
+2. **DB 없음, 서버가 source of truth** — 보유/미체결/체결은 항상 모의투자 서버에서 조회한다. 커뮤니티 사용자가 DB 설정 없이 `yml + 전략 클래스` 만으로 봇을 띄우는 것이 목표. 대가로 일부 상태(브라켓, 감쇠 카운터 등)는 메모리에만 있어 재시작 시 사라진다 — 이 트레이드오프는 각 지점에 문서화한다
+3. **안전 우선** — 공매도 방지(매도 클램프), 주문 멱등성(clientOrderId), 연속 실패 시 자동 정지. 모의투자라도 폭주하는 봇은 커뮤니티 신뢰를 깎는다
+4. **호스트 앱을 오염시키지 않는다** — 코어의 Jackson 설정, 스케줄러 스레드는 전부 내부 전용. 앱의 전역 빈을 건드리지 않는다 (0.2.1 에서 ObjectMapper 빈 노출을 제거한 이유)
+
+## 컴포넌트 맵
+
+```
+                    NextTradingAutoConfiguration (자동설정 진입점)
+                                   │
+      ┌──────────────┬─────────────┼──────────────┬─────────────┐
+      ▼              ▼             ▼              ▼             ▼
+ TokenManager → NextApiClient  MarketCalendar  PnlService   TradingGuard
+ (토큰 캐시/갱신)  (전 API 래핑)    Service        │  ├ PnlLogger (주기 로그)
+                     ▲          (개장 판단,      │  └ PnlController (GET /pnl)
+                     │           6h 캐시)       │
+                     │                          │
+                 StrategyEngine ────────────────┘
+                 (전략별 스케줄 루프)
+                     │
+              ┌──────┴──────┐
+              ▼             ▼
+        OrderExecutor   BracketMonitor
+        (Signal→주문)    (소프트웨어 익절/손절)
+```
+
+- 모든 빈은 `@ConditionalOnMissingBean` — 앱이 같은 타입의 빈을 정의하면 코어 구현을 교체할 수 있다
+- `StrategyEngine` 은 `next.engine.enabled=false` 로 끌 수 있다 (API 클라이언트만 쓰는 용도)
+
+## 인증 흐름 (TokenManager)
+
+```
+getToken()
+ ├─ 캐시 토큰이 있고 만료까지 margin(기본 60초) 이상 남음 → 그대로 반환
+ └─ 아니면 @Synchronized refresh()
+      └─ POST /v1/oauth/token (client_credentials) → 캐시 갱신
+```
+
+- `NextApiClient` 는 모든 인증 호출을 `executeWithRetry` 로 감싼다: 401(또는 `type=authentication`) 응답이면 `invalidate()` 후 **정확히 1회** 재발급-재시도. 재시도도 실패하면 예외 전파
+- 서버 토큰 유효기간은 실측 24시간 (문서상 15분 — 실서버 기준을 따름)
+
+## 엔진 틱 파이프라인 (StrategyEngine.tick)
+
+엔진은 기동 시 모든 `TradingStrategy` 빈을 찾아 각자의 `pollInterval` 로 `scheduleWithFixedDelay` 등록한다. 스케줄러는 **poolSize 1** — 전략이 여러 개여도 틱은 순차 실행된다 (같은 계좌를 공유하므로 동시 주문 경합을 원천 차단).
+
+```
+tick(strategy):
+ 1. TradingGuard.isHalted → 즉시 반환
+ 2. spec.regularHoursOnly && !MarketCalendarService.isRegularOpen() → 반환
+ 3. buildContext(): quotes(1회) + candles(심볼당 1회) + account + holdings + orders + buyingPower
+ 4. BracketMonitor.check(context) → 청산 시그널이 있으면 먼저 실행   ← 전략보다 우선
+ 5. strategy.decide(context) → 반환된 시그널을 OrderExecutor 로 실행
+ 6. 성공 → guard.recordSuccess() / 예외 → guard.recordFailure() (임계치 도달 시 비상정지)
+```
+
+- 3단계의 API 호출 수 = `2 + 심볼 수 + 2` (quotes 는 다심볼 일괄). `candleLimit`/심볼 수가 틱 비용을 결정한다
+- 예외는 틱 단위로 격리된다 — 한 틱이 실패해도 다음 틱은 정상 진행
+
+## 주문 실행 (OrderExecutor)
+
+| Signal | 처리 |
+|---|---|
+| `Buy` | `POST /v1/orders`. 성공 시 tp/sl 가격이 있으면 BracketMonitor 에 등록 |
+| `Sell` | 수량을 `min(요청, 보유)` 로 클램프 (공매도 방지). 0 이면 스킵+경고 |
+| `Cancel` | `DELETE /v1/orders/{id}` |
+
+- 모든 주문의 `clientOrderId` = `{전략이름}-{uuid8}` → 서버가 24h 중복 제출을 거부 (엔진 재시도/중복 틱에 대한 안전망)
+- 시그널 하나의 실패는 로그만 남기고 다음 시그널을 계속 실행한다 (부분 실패 허용)
+- 비상정지 중에는 모든 시그널을 스킵한다
+
+## 소프트웨어 브라켓 (BracketMonitor)
+
+서버가 네이티브 STOP/BRACKET 주문을 아직 지원하지 않아 (2026-08 실측: `/v1/orders/advanced` 는 모든 요청을 거부) 코어가 소프트웨어로 대체한다:
+
+```
+등록: Buy 주문 접수 직후 {entryOrderId, symbol, qty, tp?, sl?} 저장 (메모리 Map)
+매 틱 check():
+ ├─ 미활성 브라켓: 진입 주문 상태 조회
+ │    ├─ FILLED → 활성화
+ │    └─ CANCELED/REJECTED/EXPIRED → 브라켓 폐기
+ └─ 활성 브라켓: 현재가 vs tp/sl
+      └─ 도달 → 브라켓 제거 후 시장가 Sell 시그널 생성 (수량은 보유로 클램프)
+```
+
+알려진 제약 (의도된 트레이드오프):
+- **재시작 시 소실** — DB 없음 원칙의 대가. 전략 가이드에서 "재시작 후 포지션 수동 점검"을 권고
+- 청산이 시장가라 급변동 시 슬리피지 존재
+- 판정 주기가 엔진 틱 주기와 같으므로 틱 사이의 순간 스파이크는 놓칠 수 있다
+
+서버가 advanced 주문을 배포하면: `OrderExecutor.buy()` 에서 tp/sl 존재 시 BRACKET 주문으로 보내는 fast-path 를 추가하고 BracketMonitor 는 폴백으로 강등하는 것이 로드맵이다.
+
+## 비상정지 (TradingGuard)
+
+서버 킬 스위치(`/v1/kill-switch`)가 미배포라 클라이언트 측에서 같은 효과를 낸다:
+
+- 틱 연속 실패가 `next.engine.max-consecutive-failures`(기본 5) 도달 → `halt()`
+- `halt()`: 미체결 전량 개별 취소 + `halted=true` (이후 모든 주문 차단, 틱 스킵)
+- 해제: `TradingGuard.resume()` 호출 또는 앱 재시작. **자동 해제는 없다** — 사람이 원인을 보게 만드는 것이 의도
+- 서버 킬 스위치가 배포되면 `halt()` 에서 `POST /v1/kill-switch` 를 함께 호출하도록 확장 예정
+
+## 상태 지도 — 무엇이 어디에 있는가
+
+| 상태 | 위치 | 재시작 시 |
+|---|---|---|
+| 보유 포지션, 미체결 주문, 체결 내역, 평균단가 | **서버** | 유지 (API 로 재조회) |
+| 액세스 토큰 | 메모리 (TokenManager) | 재발급 (자동) |
+| 시장 캘린더 | 메모리 캐시 (6h TTL) | 재조회 (자동) |
+| 브라켓 (익절/손절 예약) | 메모리 (BracketMonitor) | **소실** |
+| 비상정지 플래그, 연속 실패 카운터 | 메모리 (TradingGuard) | 초기화 (정지 해제됨) |
+| 전략 내부 상태 (진입 시각, 감쇠 카운터 등) | 메모리 (전략 필드) | **소실** — 전략이 서버 상태로 복원하는 패턴 권장 |
+
+## 에러 처리 계층
+
+```
+서버 에러 응답 {"error":{type,code,message,...}}
+ → NextApiClient 가 파싱 → NextApiException(httpStatus, error) throw
+    ├─ isAuthError → 토큰 재발급 1회 재시도 (클라이언트 계층에서 흡수)
+    ├─ 전략 틱 안에서 발생 → 틱 실패로 기록 → guard 카운트
+    └─ 시그널 실행 중 발생 → 해당 시그널만 실패 로그, 다음 시그널 계속
+```
+
+## 버전/호환 정책
+
+- SPI(`TradingStrategy`/`StrategyContext`/`Signal`) 변경 = breaking → minor 버전 상승 (0.x 에서는 0.N+1.0)
+- JitPack 이 git 태그를 빌드하므로 **태그 = 릴리즈**. 태그를 옮겨 달지 않는다 (JitPack 은 한 번 빌드한 버전을 캐시)
+- Gradle Wrapper 는 반드시 커밋에 포함한다 (없으면 JitPack 이 구버전 Gradle 로 빌드 실패)
+
+## 알려진 한계 요약
+
+- 브라켓/전략 상태의 메모리 휘발성 (위 상태 지도 참조)
+- 호가 스냅샷 기반 — L2 오더북/실시간 스트림 없음, 틱 주기 사이의 가격은 못 본다
+- 정규장 판정은 캘린더 API 기준 — 프리/애프터마켓 주문은 `regularHoursOnly=false` 로 가능하나 체결 규칙은 서버 정책을 따른다
+- 단일 계좌 전제 — 전략 여러 개가 같은 심볼을 다루면 보유/미체결 판단이 겹친다 (전략 가이드에서 금지 권고)
