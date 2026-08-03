@@ -12,7 +12,7 @@
 ## 모듈 구조 (0.5.0+)
 
 ```
-hermetix-broker   <- 연결 계층 (CCXT 역할): BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
+hermetix-broker   <- 연결 계층: BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
                      Spring 컨테이너 없이도 사용 가능 (어댑터는 일반 생성자 주입)
 hermetix-engine   <- 전략 계층: 전략 SPI + 실행 엔진 + PnL + 자동설정 (broker 에 api 의존)
 ```

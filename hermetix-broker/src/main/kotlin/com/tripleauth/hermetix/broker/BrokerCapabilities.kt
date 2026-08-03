@@ -3,7 +3,7 @@ package com.tripleauth.hermetix.broker
 import com.tripleauth.hermetix.client.dto.CandleInterval
 
 /**
- * 브로커가 지원하는 기능의 코드 선언 (CCXT 의 `has` 맵에 해당).
+ * 브로커가 지원하는 기능의 코드 선언.
  *
  * 엔진은 이 선언을 보고 스스로 적응한다:
  * - 기동 시 전략의 candleInterval 이 미지원이면 스케줄하지 않고 명확히 알린다 (fail-fast)

@@ -1,7 +1,7 @@
 package com.tripleauth.hermetix.broker
 
 /**
- * 타입화된 브로커 에러 계층 (CCXT 에러 체계에 해당).
+ * 타입화된 브로커 에러 계층.
  *
  * 어댑터는 브로커별 에러 코드를 이 타입들로 매핑하고, 엔진은 타입별로 반응한다:
  * - [MarketClosedError] → 틱 조용히 스킵 (비상정지 카운트 제외)
