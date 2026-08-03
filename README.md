@@ -1,6 +1,9 @@
-# next-trading-core
+# hermetix-trading-core
 
-넥스트증권 모의투자 OpenAPI 기반 **자동매매 전략 프레임워크**.
+모의투자 **자동매매 전략 프레임워크**. 전략 한 번 작성하면 증권사는 설정으로 갈아끼웁니다.
+
+- 지원 브로커: **넥스트증권 모의투자** (`broker: next`)
+- 추가 예정: 한국투자증권(KIS) 모의투자, 키움증권 모의투자 — [아키텍처 문서](docs/architecture.md)의 BrokerClient 어댑터 구조 참조
 
 전략 작성자는 `TradingStrategy` 인터페이스 하나만 구현하면 됩니다. 인증(OAuth 토큰 관리), 시세/계좌 조회, 주문 실행, 체결 추적, 익절/손절 관리, 장 운영시간 체크, 비상정지는 전부 코어가 처리합니다.
 
@@ -17,7 +20,7 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.tauthdev:next-trading-core:0.2.1")
+    implementation("com.github.tauthdev:hermetix-trading-core:0.3.0")
 }
 ```
 
@@ -25,9 +28,10 @@ dependencies {
 
 ```yaml
 # application.yml
-next:
-  api:
-    client-id: pk_test_...      # 넥스트증권 모의투자 API 키
+hermetix:
+  broker: next                   # 사용할 증권사 어댑터 (현재: next)
+  next:
+    client-id: pk_test_...       # 넥스트증권 모의투자 API 키
     client-secret: sk_test_...
     account-id: acc_main
   engine:
@@ -100,7 +104,7 @@ class MyFirstStrategy : TradingStrategy {
 - **주기 로그** — 기본 60분마다 `PNL / portfolio=... unrealized=+... | AAPL +54.32(+9.64%)` 형식으로 로그 출력
 
 ```yaml
-next:
+hermetix:
   pnl:
     log-interval-minutes: 60   # 로그 주기 (enabled: false 로 끔)
     initial-capital: 20000     # 설정하면 총수익률(return=%)도 계산

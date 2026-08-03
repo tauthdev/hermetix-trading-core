@@ -1,6 +1,6 @@
 # 코어 아키텍처
 
-이 문서는 next-trading-core 의 **내부 동작**을 설명합니다. 전략을 작성하려면 [전략 작성 가이드](strategy-guide.md)를 보세요 — 이 문서는 코어에 기여하거나 동작을 깊이 이해하려는 사람을 위한 것입니다.
+이 문서는 hermetix-trading-core 의 **내부 동작**을 설명합니다. 전략을 작성하려면 [전략 작성 가이드](strategy-guide.md)를 보세요 — 이 문서는 코어에 기여하거나 동작을 깊이 이해하려는 사람을 위한 것입니다.
 
 ## 설계 원칙
 
@@ -31,7 +31,7 @@
 ```
 
 - 모든 빈은 `@ConditionalOnMissingBean` — 앱이 같은 타입의 빈을 정의하면 코어 구현을 교체할 수 있다
-- `StrategyEngine` 은 `next.engine.enabled=false` 로 끌 수 있다 (API 클라이언트만 쓰는 용도)
+- `StrategyEngine` 은 `hermetix.engine.enabled=false` 로 끌 수 있다 (API 클라이언트만 쓰는 용도)
 
 ## 인증 흐름 (TokenManager)
 
@@ -99,7 +99,7 @@ tick(strategy):
 
 서버 킬 스위치(`/v1/kill-switch`)가 미배포라 클라이언트 측에서 같은 효과를 낸다:
 
-- 틱 연속 실패가 `next.engine.max-consecutive-failures`(기본 5) 도달 → `halt()`
+- 틱 연속 실패가 `hermetix.engine.max-consecutive-failures`(기본 5) 도달 → `halt()`
 - `halt()`: 미체결 전량 개별 취소 + `halted=true` (이후 모든 주문 차단, 틱 스킵)
 - 해제: `TradingGuard.resume()` 호출 또는 앱 재시작. **자동 해제는 없다** — 사람이 원인을 보게 만드는 것이 의도
 - 서버 킬 스위치가 배포되면 `halt()` 에서 `POST /v1/kill-switch` 를 함께 호출하도록 확장 예정

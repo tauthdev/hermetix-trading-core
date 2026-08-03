@@ -1,6 +1,6 @@
 # 기여 가이드
 
-next-trading-core 는 넥스트증권 모의투자 API 로 자동매매 전략을 만드는 커뮤니티 프레임워크입니다. 기여를 환영합니다.
+hermetix-trading-core 는 넥스트증권 모의투자 API 로 자동매매 전략을 만드는 커뮤니티 프레임워크입니다. 기여를 환영합니다.
 
 ## 어디에 기여하나요?
 
@@ -16,8 +16,8 @@ next-trading-core 는 넥스트증권 모의투자 API 로 자동매매 전략�
 - JDK 17, Kotlin 1.9 (Gradle Wrapper 포함 — 로컬 Gradle 설치 불필요)
 
 ```bash
-git clone https://github.com/tauthdev/next-trading-core.git
-cd next-trading-core
+git clone https://github.com/tauthdev/hermetix-trading-core.git
+cd hermetix-trading-core
 ./gradlew build            # 컴파일 + 단위 테스트
 ./gradlew publishToMavenLocal   # 로컬에서 전략 레포와 함께 개발할 때
 ```

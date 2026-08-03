@@ -1,1 +1,1 @@
-rootProject.name = "next-trading-core"
+rootProject.name = "hermetix-trading-core"

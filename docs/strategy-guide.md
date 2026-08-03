@@ -1,6 +1,6 @@
 # 전략 작성 가이드
 
-이 문서는 next-trading-core 위에서 전략을 작성하는 방법을 처음부터 끝까지 다룹니다. 빠른 시작은 [next-strategy-template](https://github.com/tauthdev/next-strategy-template) README 를, 이 문서는 그다음 단계의 상세 레퍼런스로 보세요.
+이 문서는 hermetix-trading-core 위에서 전략을 작성하는 방법을 처음부터 끝까지 다룹니다. 빠른 시작은 [next-strategy-template](https://github.com/tauthdev/next-strategy-template) README 를, 이 문서는 그다음 단계의 상세 레퍼런스로 보세요.
 
 ## 1. 전략의 생명주기
 
@@ -87,7 +87,7 @@ Signal.Cancel(orderId = order.orderId)
 
 ## 5. 안전장치
 
-- **비상정지(TradingGuard)**: 틱 처리 중 연속 실패가 `next.engine.max-consecutive-failures`(기본 5)에 도달하면 미체결 전량 취소 후 모든 주문이 차단됩니다. 해제는 `TradingGuard.resume()` (빈 주입 후 호출) 또는 앱 재시작
+- **비상정지(TradingGuard)**: 틱 처리 중 연속 실패가 `hermetix.engine.max-consecutive-failures`(기본 5)에 도달하면 미체결 전량 취소 후 모든 주문이 차단됩니다. 해제는 `TradingGuard.resume()` (빈 주입 후 호출) 또는 앱 재시작
 - **clientOrderId 멱등성**: 모든 주문에 `{전략이름}-{uuid}` 가 부여되어 24시간 내 중복 제출이 방지됩니다
 - **주의 — 여러 전략이 같은 심볼을 다루면 안 됩니다.** 보유/미체결 판단이 심볼 단위라 서로의 포지션을 침범합니다. 전략마다 다른 종목을 배정하세요
 

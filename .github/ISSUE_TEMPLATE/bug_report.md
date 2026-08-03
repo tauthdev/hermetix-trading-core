@@ -20,7 +20,7 @@ labels: bug
 
 ## 환경
 
-- next-trading-core 버전:
+- hermetix-trading-core 버전:
 - JDK / OS:
 - 로그 (키/시크릿은 반드시 지우고 붙여주세요):
 
