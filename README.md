@@ -2,8 +2,33 @@
 
 모의투자 **자동매매 전략 프레임워크**. 전략 한 번 작성하면 증권사는 설정으로 갈아끼웁니다.
 
-- 지원 브로커: **넥스트증권 모의투자** (`broker: next`)
-- 추가 예정: 한국투자증권(KIS) 모의투자, 키움증권 모의투자 — [아키텍처 문서](docs/architecture.md)의 BrokerClient 어댑터 구조 참조
+## 지원 브로커
+
+| `hermetix.broker` | 증권사 | 시장 | 캔들 지원 | 비고 |
+|---|---|---|---|---|
+| `next` (기본) | 넥스트증권 모의투자 | 미국주식 | 1m/5m/1h/1d | |
+| `kis` | 한국투자증권 모의투자 | KRX 국내주식 | 1d | 레이트리밋 쓰로틀/재시도 내장 |
+| `kiwoom` | 키움증권 모의투자 | KRX 국내주식 | 1d | 레이트리밋 쓰로틀/재시도 내장 |
+
+전략 코드는 브로커와 무관합니다 — 설정만 바꾸면 같은 전략이 다른 증권사에서 돕니다.
+(KRX 브로커는 일봉만 지원하므로 시간봉 전략은 `candleInterval` 을 DAY_1 로 조정하세요)
+
+```yaml
+# 한국투자증권 모의투자로 실행할 때
+hermetix:
+  broker: kis
+  kis:
+    appkey: ${KIS_APPKEY:}
+    appsecret: ${KIS_APPSECRET:}
+    cano: ${KIS_CANO:}        # 모의계좌번호 8자리
+
+# 키움 모의투자로 실행할 때
+hermetix:
+  broker: kiwoom
+  kiwoom:
+    appkey: ${KIWOOM_APPKEY:}
+    secretkey: ${KIWOOM_SECRETKEY:}
+```
 
 전략 작성자는 `TradingStrategy` 인터페이스 하나만 구현하면 됩니다. 인증(OAuth 토큰 관리), 시세/계좌 조회, 주문 실행, 체결 추적, 익절/손절 관리, 장 운영시간 체크, 비상정지는 전부 코어가 처리합니다.
 
@@ -20,7 +45,7 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.tauthdev:hermetix-trading-core:0.3.0")
+    implementation("com.github.tauthdev:hermetix-trading-core:0.4.0")
 }
 ```
 

@@ -125,6 +125,22 @@ tick(strategy):
     └─ 시그널 실행 중 발생 → 해당 시그널만 실패 로그, 다음 시그널 계속
 ```
 
+## 브로커 어댑터
+
+`BrokerClient` 구현체는 `hermetix.broker` 값으로 선택된다 (@ConditionalOnProperty). 실측 기반 어댑터별 특성:
+
+| | next | kis | kiwoom |
+|---|---|---|---|
+| 인증 | OAuth client_credentials, 토큰 24h | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) |
+| 레이트리밋 | 없음(관측상) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 |
+| 캔들 | 1m/5m/1h/1d | 1d (분봉 API 가 당일 한정이라 미지원) | 1d |
+| 캘린더 | 서버 제공 (미국장) | KRX 합성 (공휴일 미반영) | KRX 합성 |
+| clientOrderId | 지원 (24h 멱등) | 미지원 (무시) | 미지원 (무시) |
+| 주문취소 | orderId 만으로 가능 | 당일 주문조회로 지점번호 역참조 | 미체결 조회로 종목코드 역참조 |
+| 수량/금액 표기 | JSON 문자열 | 문자열 | 부호 접두(가격) / zero-padded(금액) — 어댑터가 정규화 |
+
+새 어댑터 추가 절차: ① 모의서버 실측(토큰/시세/캔들/잔고/주문/에러 포맷) ② `BrokerClient` 구현 ③ 오토컨피그에 @ConditionalOnProperty 등록 ④ env-gated 실서버 스모크 테스트.
+
 ## 버전/호환 정책
 
 - SPI(`TradingStrategy`/`StrategyContext`/`Signal`) 변경 = breaking → minor 버전 상승 (0.x 에서는 0.N+1.0)

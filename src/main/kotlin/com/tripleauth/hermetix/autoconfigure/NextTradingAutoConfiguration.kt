@@ -6,6 +6,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.kotlinModule
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.client.NextApiClient
+import com.tripleauth.hermetix.client.kis.KisApiClient
+import com.tripleauth.hermetix.client.kis.KisApiProperties
+import com.tripleauth.hermetix.client.kiwoom.KiwoomApiClient
+import com.tripleauth.hermetix.client.kiwoom.KiwoomApiProperties
 import com.tripleauth.hermetix.client.NextApiProperties
 import com.tripleauth.hermetix.client.TokenManager
 import com.tripleauth.hermetix.engine.BracketMonitor
@@ -24,7 +28,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 
 @AutoConfiguration
-@EnableConfigurationProperties(NextApiProperties::class, NextEngineProperties::class, NextPnlProperties::class)
+@EnableConfigurationProperties(NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class, NextEngineProperties::class, NextPnlProperties::class)
 class NextTradingAutoConfiguration {
 
     // 앱의 전역 Jackson 설정을 건드리지 않도록 빈으로 노출하지 않는다 (API 통신 전용)
@@ -44,6 +48,18 @@ class NextTradingAutoConfiguration {
     @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "next", matchIfMissing = true)
     fun nextApiClient(properties: NextApiProperties, tokenManager: TokenManager): NextApiClient =
         NextApiClient(properties, tokenManager, objectMapper)
+
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "kis")
+    fun kisApiClient(kisProperties: KisApiProperties): KisApiClient =
+        KisApiClient(kisProperties, objectMapper)
+
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "kiwoom")
+    fun kiwoomApiClient(kiwoomProperties: KiwoomApiProperties): KiwoomApiClient =
+        KiwoomApiClient(kiwoomProperties, objectMapper)
 
     @Bean
     @ConditionalOnMissingBean
