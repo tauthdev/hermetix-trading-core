@@ -1,62 +1,52 @@
 plugins {
-    kotlin("jvm") version "1.9.25"
-    kotlin("plugin.spring") version "1.9.25"
-    id("org.springframework.boot") version "3.3.5" apply false
-    id("io.spring.dependency-management") version "1.1.6"
-    `java-library`
-    `maven-publish`
+    kotlin("jvm") version "1.9.25" apply false
+    kotlin("plugin.spring") version "1.9.25" apply false
+    id("io.spring.dependency-management") version "1.1.6" apply false
 }
 
-group = "com.github.tauthdev"
-version = "0.4.0"
+subprojects {
+    // JitPack 멀티모듈 좌표(com.github.tauthdev.hermetix-trading-core:모듈명)와 로컬 배포를 일치시킨다
+    group = "com.github.tauthdev.hermetix-trading-core"
+    version = "0.5.0"
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+    apply(plugin = "org.jetbrains.kotlin.jvm")
+    apply(plugin = "org.jetbrains.kotlin.plugin.spring")
+    apply(plugin = "io.spring.dependency-management")
+    apply(plugin = "java-library")
+    apply(plugin = "maven-publish")
+
+    repositories {
+        mavenCentral()
     }
-    withSourcesJar()
-}
 
-repositories {
-    mavenCentral()
-}
-
-dependencyManagement {
-    imports {
-        mavenBom("org.springframework.boot:spring-boot-dependencies:3.3.5")
+    the<io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension>().apply {
+        imports {
+            mavenBom("org.springframework.boot:spring-boot-dependencies:3.3.5")
+        }
     }
-}
 
-dependencies {
-    // 라이브러리가 웹서버(tomcat)를 강제하지 않도록 starter-web 대신 spring-web 만 의존한다
-    api("org.springframework.boot:spring-boot-autoconfigure")
-    api("org.springframework:spring-web")
-    api("com.fasterxml.jackson.module:jackson-module-kotlin")
-    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
-    api("io.github.oshai:kotlin-logging-jvm:5.1.4")
-    implementation(kotlin("reflect"))
-
-    annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
-
-    testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    testImplementation("io.mockk:mockk:1.13.13")
-}
-
-kotlin {
-    compilerOptions {
-        freeCompilerArgs.add("-Xjsr305=strict")
+    extensions.configure<JavaPluginExtension> {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+        withSourcesJar()
     }
-}
 
-tasks.withType<Test> {
-    useJUnitPlatform()
-}
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+        compilerOptions {
+            freeCompilerArgs.add("-Xjsr305=strict")
+        }
+    }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            from(components["java"])
+    tasks.withType<Test> {
+        useJUnitPlatform()
+    }
+
+    extensions.configure<PublishingExtension> {
+        publications {
+            create<MavenPublication>("maven") {
+                from(components["java"])
+            }
         }
     }
 }
