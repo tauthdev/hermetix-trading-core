@@ -47,9 +47,9 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (broker 가 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.0")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.1")
     // 봇 없이 연결 계층만 필요하면 (시세 수집, 대시보드 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.0")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.1")
 }
 ```
 
