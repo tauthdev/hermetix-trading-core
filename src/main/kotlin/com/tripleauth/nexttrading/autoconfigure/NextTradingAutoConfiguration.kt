@@ -12,6 +12,9 @@ import com.tripleauth.nexttrading.engine.OrderExecutor
 import com.tripleauth.nexttrading.engine.StrategyEngine
 import com.tripleauth.nexttrading.engine.TradingGuard
 import com.tripleauth.nexttrading.market.MarketCalendarService
+import com.tripleauth.nexttrading.pnl.PnlController
+import com.tripleauth.nexttrading.pnl.PnlLogger
+import com.tripleauth.nexttrading.pnl.PnlService
 import com.tripleauth.nexttrading.strategy.TradingStrategy
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
@@ -21,7 +24,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.annotation.Bean
 
 @AutoConfiguration
-@EnableConfigurationProperties(NextApiProperties::class, NextEngineProperties::class)
+@EnableConfigurationProperties(NextApiProperties::class, NextEngineProperties::class, NextPnlProperties::class)
 class NextTradingAutoConfiguration {
 
     @Bean
@@ -65,6 +68,22 @@ class NextTradingAutoConfiguration {
     @ConditionalOnMissingBean
     fun orderExecutor(nextApiClient: NextApiClient, bracketMonitor: BracketMonitor, tradingGuard: TradingGuard): OrderExecutor =
         OrderExecutor(nextApiClient, bracketMonitor, tradingGuard)
+
+    @Bean
+    @ConditionalOnMissingBean
+    fun pnlService(nextApiClient: NextApiClient, pnlProperties: NextPnlProperties): PnlService =
+        PnlService(nextApiClient, pnlProperties.initialCapital)
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "next.pnl", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    fun pnlLogger(pnlService: PnlService, pnlProperties: NextPnlProperties): PnlLogger =
+        PnlLogger(pnlService, java.time.Duration.ofMinutes(pnlProperties.logIntervalMinutes))
+
+    @Bean
+    @ConditionalOnMissingBean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication
+    fun pnlController(pnlService: PnlService): PnlController = PnlController(pnlService)
 
     @Bean
     @ConditionalOnMissingBean

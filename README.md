@@ -17,7 +17,7 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.tauthdev:next-trading-core:0.1.2")
+    implementation("com.github.tauthdev:next-trading-core:0.2.0")
 }
 ```
 
@@ -91,6 +91,20 @@ class MyFirstStrategy : TradingStrategy {
 
 - 전략 안에서 API 를 직접 호출하거나 스레드를 만들지 않습니다 — 필요한 데이터는 `StrategyContext` 로 공급됩니다
 - 전략 상태는 클래스 필드에 보관합니다 (인스턴스는 재사용됨). 단, 앱 재시작 시 소프트웨어 브라켓 상태는 사라지므로 `decide()` 에서 보유 포지션을 점검하는 로직을 두는 것을 권장합니다
+
+## 수익률 확인
+
+전략 앱을 띄우면 두 가지가 기본 제공됩니다:
+
+- **`GET /pnl`** — 계좌 총평가/현금/평가손익/종목별 손익 JSON (`curl localhost:8080/pnl`)
+- **주기 로그** — 기본 60분마다 `PNL / portfolio=... unrealized=+... | AAPL +54.32(+9.64%)` 형식으로 로그 출력
+
+```yaml
+next:
+  pnl:
+    log-interval-minutes: 60   # 로그 주기 (enabled: false 로 끔)
+    initial-capital: 20000     # 설정하면 총수익률(return=%)도 계산
+```
 
 ## 현재 API 커버리지 (2026-08 기준)
 

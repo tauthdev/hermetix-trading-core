@@ -82,3 +82,19 @@ data class Instrument(
     val currency: String?,
     val tradable: Boolean,
 )
+
+data class InstrumentDetailResponse(
+    val symbol: String,
+    val name: String,
+    val type: String?,
+    val exchange: String?,
+    val currency: String?,
+    val tradable: Boolean,
+    val fractionable: Boolean?,
+    val shortable: Boolean?,
+    val easyToBorrow: Boolean?,
+    val marginable: Boolean?,
+    val minOrderSize: BigDecimal?,
+    val status: String?,
+    val restrictions: List<String> = emptyList(),
+)

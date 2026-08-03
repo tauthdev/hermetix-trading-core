@@ -11,6 +11,7 @@ import com.tripleauth.nexttrading.client.dto.CreateOrderRequest
 import com.tripleauth.nexttrading.client.dto.ExchangeRateResponse
 import com.tripleauth.nexttrading.client.dto.FillsResponse
 import com.tripleauth.nexttrading.client.dto.HoldingsResponse
+import com.tripleauth.nexttrading.client.dto.InstrumentDetailResponse
 import com.tripleauth.nexttrading.client.dto.InstrumentsResponse
 import com.tripleauth.nexttrading.client.dto.OrderResponse
 import com.tripleauth.nexttrading.client.dto.OrdersResponse
@@ -62,13 +63,17 @@ class NextApiClient(
     fun getExchangeRate(base: String = "USD", quote: String = "KRW"): ExchangeRateResponse =
         get(auth = true) { it.path("/v1/market/exchange-rate").queryParam("base", base).queryParam("quote", quote).build() }
 
-    fun getInstruments(cursor: String? = null, limit: Int? = null): InstrumentsResponse =
+    fun getInstruments(search: String? = null, cursor: String? = null, limit: Int? = null): InstrumentsResponse =
         get(auth = true) {
             it.path("/v1/instruments")
+                .apply { if (search != null) queryParam("search", search) }
                 .apply { if (cursor != null) queryParam("cursor", cursor) }
                 .apply { if (limit != null) queryParam("limit", limit) }
                 .build()
         }
+
+    fun getInstrument(symbol: String): InstrumentDetailResponse =
+        get(auth = true) { it.path("/v1/instruments/{symbol}").build(symbol) }
 
     // ----------------------------------------------------------------- account
 

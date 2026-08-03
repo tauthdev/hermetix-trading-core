@@ -92,6 +92,39 @@ class NextApiClientTest {
     }
 
     @Test
+    fun `종목 상세를 조회한다`() {
+        enqueueToken()
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"symbol":"AAPL","name":"Apple Inc.","type":"STOCK","exchange":"NASDAQ","currency":"USD",
+                "tradable":true,"fractionable":true,"shortable":true,"easyToBorrow":true,"marginable":true,
+                "minOrderSize":null,"status":"ACTIVE","restrictions":[]}""".trimIndent(),
+            ),
+        )
+
+        val detail = client.getInstrument("AAPL")
+
+        assertThat(detail.tradable).isTrue()
+        assertThat(detail.fractionable).isTrue()
+        server.takeRequest() // token
+        assertThat(server.takeRequest().path).isEqualTo("/v1/instruments/AAPL")
+    }
+
+    @Test
+    fun `종목 검색 파라미터를 붙인다`() {
+        enqueueToken()
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"instruments":[],"nextCursor":null}"""),
+        )
+
+        client.getInstruments(search = "apple", limit = 5)
+
+        server.takeRequest() // token
+        assertThat(server.takeRequest().path).isEqualTo("/v1/instruments?search=apple&limit=5")
+    }
+
+    @Test
     fun `에러 엔벨로프를 NextApiException으로 변환한다`() {
         enqueueToken()
         server.enqueue(
