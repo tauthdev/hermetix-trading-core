@@ -17,7 +17,7 @@ repositories {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.tauthdev:next-trading-core:0.1.1")
+    implementation("com.github.tauthdev:next-trading-core:0.1.2")
 }
 ```
 
