@@ -52,7 +52,10 @@ import java.time.format.DateTimeFormatter
  * - 캘린더는 KRX 정규장(평일 09:00-15:30 KST)을 합성한다 — 공휴일은 개장일로 보이지만
  *   주문 시 서버가 거부하므로 안전에는 문제 없다
  * - clientOrderId 미지원 (KIS 에 대응 개념 없음 — 무시된다)
- * - 주문 취소는 당일 주문 조회로 지점번호를 역참조한다
+ * - **모의 서버는 미체결/체결 주문 조회를 제공하지 않는다** (일별주문체결 TR 이 항상 빈 목록,
+ *   정정취소가능조회 TR 은 미제공 — 2026-08 실측). 따라서 주문은 어댑터가 메모리에서 추적하고,
+ *   체결 판정은 보유 수량 변화로 근사한다. 앱 재시작 시 추적이 끊긴다 (재시작 후 잔여 미체결 주의)
+ * - 주문 취소는 지점번호 없이 ODNO 만으로 동작한다 (실측 검증)
  */
 class KisApiClient(
     private val properties: KisApiProperties,
@@ -69,7 +72,11 @@ class KisApiClient(
         clientOrderId = false,
         nativeBracket = false,
         fractionalShares = false,
+        serverOpenOrders = false, // 모의 서버가 주문 조회를 제공하지 않음 - 어댑터 내부 추적
     )
+
+    /** 어댑터 내부 주문 추적 (모의 서버가 주문 조회 미제공) */
+    private val trackedOrders = java.util.concurrent.ConcurrentHashMap<String, TrackedOrder>()
 
     private val restClient = RestClient.builder()
         .baseUrl(properties.baseUrl)
@@ -213,7 +220,7 @@ class KisApiClient(
             ),
         ).path("output")
 
-        return OrderResponse(
+        val order = OrderResponse(
             orderId = output.path("ODNO").asText(),
             clientOrderId = request.clientOrderId, // KIS 미지원 — 반환만 유지
             status = OrderStatus.SUBMITTED,
@@ -225,23 +232,28 @@ class KisApiClient(
             filledQuantity = BigDecimal.ZERO,
             submittedAt = Instant.now(),
         )
+
+        trackedOrders[order.orderId] = TrackedOrder(order = order, baselineQty = holdingQty(request.symbol), date = LocalDate.now(KST))
+        return order
     }
 
-    override fun getOrders(): OrdersResponse =
-        OrdersResponse(dailyOrders().map { it.toOrderResponse() })
+    override fun getOrders(): OrdersResponse {
+        refreshTrackedOrders()
+        return OrdersResponse(trackedOrders.values.filter { it.order.status.isOpen }.map { it.order })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
-        dailyOrders().firstOrNull { it.path("odno").asText() == orderId }?.toOrderResponse()
-            ?: throw OrderNotFoundError("order-not-found", "KIS 주문을 찾을 수 없습니다: $orderId")
+    override fun getOrder(orderId: String): OrderResponse {
+        refreshTrackedOrders()
+        return trackedOrders[orderId]?.order
+            ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED) // 추적 밖(재시작 등) - 알 수 없어 취소로 간주
+    }
 
     override fun cancelOrder(orderId: String): OrderResponse {
-        val order = dailyOrders().firstOrNull { it.path("odno").asText() == orderId }
-            ?: throw OrderNotFoundError("order-not-found", "KIS 주문을 찾을 수 없습니다: $orderId")
-
+        // 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
         call(
             HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U",
             body = accountParams() + mapOf(
-                "KRX_FWDG_ORD_ORGNO" to order.path("ord_gno_brno").asText(""),
+                "KRX_FWDG_ORD_ORGNO" to "",
                 "ORGN_ODNO" to orderId,
                 "ORD_DVSN" to "00",
                 "RVSE_CNCL_DVSN_CD" to "02", // 취소
@@ -251,21 +263,25 @@ class KisApiClient(
             ),
         )
 
-        return OrderResponse(orderId = orderId, status = OrderStatus.CANCELED, canceledAt = Instant.now())
+        val canceled = OrderResponse(orderId = orderId, status = OrderStatus.CANCELED, canceledAt = Instant.now())
+        trackedOrders[orderId]?.let { trackedOrders[orderId] = it.copy(order = it.order.copy(status = OrderStatus.CANCELED, canceledAt = Instant.now())) }
+        return canceled
     }
 
     override fun getFills(): FillsResponse {
-        val fills = dailyOrders()
-            .filter { it.decimal("tot_ccld_qty") > BigDecimal.ZERO }
-            .map { row ->
+        // 모의 서버가 체결 내역 조회를 제공하지 않는다 - 추적 주문 중 체결 판정된 것으로 근사
+        refreshTrackedOrders()
+        val fills = trackedOrders.values
+            .filter { it.order.status == OrderStatus.FILLED }
+            .map { tracked ->
                 Fill(
-                    fillId = row.path("odno").asText(),
-                    orderId = row.path("odno").asText(),
-                    symbol = row.path("pdno").asText(),
-                    side = if (row.path("sll_buy_dvsn_cd").asText() == "02") OrderSide.BUY else OrderSide.SELL,
-                    quantity = row.decimal("tot_ccld_qty"),
-                    price = row.decimalOrNull("avg_prvs"),
-                    amount = row.decimalOrNull("tot_ccld_amt"),
+                    fillId = tracked.order.orderId,
+                    orderId = tracked.order.orderId,
+                    symbol = tracked.order.symbol,
+                    side = tracked.order.side,
+                    quantity = tracked.order.quantity,
+                    price = tracked.order.limitPrice,
+                    amount = null,
                     timestamp = null,
                 )
             }
@@ -283,43 +299,39 @@ class KisApiClient(
         ),
     )
 
-    private fun dailyOrders(): List<JsonNode> {
-        val today = LocalDate.now(KST).format(DATE)
-        return call(
-            HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-daily-ccld", "VTTC8001R",
-            query = accountParams() + mapOf(
-                "INQR_STRT_DT" to today, "INQR_END_DT" to today,
-                "SLL_BUY_DVSN_CD" to "00", "INQR_DVSN" to "00", "PDNO" to "", "CCLD_DVSN" to "00",
-                "ORD_GNO_BRNO" to "", "ODNO" to "", "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "",
-                "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "",
-            ),
-        ).path("output1").toList()
-    }
+    /** 추적 중인 미체결 주문의 체결 여부를 보유 수량 변화로 판정한다 (모의 서버 제약의 근사) */
+    private fun refreshTrackedOrders() {
+        val open = trackedOrders.values.filter { it.order.status.isOpen }
+        val today = LocalDate.now(KST)
 
-    private fun JsonNode.toOrderResponse(): OrderResponse {
-        val ordQty = decimal("ord_qty")
-        val filled = decimal("tot_ccld_qty")
-        val canceled = path("cncl_yn").asText("") == "Y" || decimalOrNull("cncl_cfrm_qty")?.let { it > BigDecimal.ZERO } == true
+        // DAY 주문 - 날짜가 바뀌면 소멸
+        trackedOrders.values.filter { it.date != today }.forEach { trackedOrders.remove(it.order.orderId) }
+        if (open.none { it.date == today }) return
 
-        val status = when {
-            canceled -> OrderStatus.CANCELED
-            filled >= ordQty && ordQty > BigDecimal.ZERO -> OrderStatus.FILLED
-            filled > BigDecimal.ZERO -> OrderStatus.PARTIALLY_FILLED
-            else -> OrderStatus.SUBMITTED
+        val holdings = getHoldings().holdings.associateBy { it.symbol }
+        open.filter { it.date == today }.forEach { tracked ->
+            val current = holdings[tracked.order.symbol]?.quantity ?: BigDecimal.ZERO
+            val filled = when (tracked.order.side) {
+                OrderSide.BUY -> current >= tracked.baselineQty + (tracked.order.quantity ?: BigDecimal.ZERO)
+                OrderSide.SELL -> current <= tracked.baselineQty - (tracked.order.quantity ?: BigDecimal.ZERO)
+                else -> false
+            }
+            if (filled) {
+                trackedOrders[tracked.order.orderId] = tracked.copy(
+                    order = tracked.order.copy(status = OrderStatus.FILLED, filledQuantity = tracked.order.quantity),
+                )
+            }
         }
-
-        return OrderResponse(
-            orderId = path("odno").asText(),
-            status = status,
-            symbol = path("pdno").asText(),
-            side = if (path("sll_buy_dvsn_cd").asText() == "02") OrderSide.BUY else OrderSide.SELL,
-            orderType = if (path("ord_dvsn_cd").asText("00") == "01") OrderType.MARKET else OrderType.LIMIT,
-            quantity = ordQty,
-            limitPrice = decimalOrNull("ord_unpr"),
-            filledQuantity = filled,
-            avgFillPrice = decimalOrNull("avg_prvs"),
-        )
     }
+
+    private fun holdingQty(symbol: String): BigDecimal =
+        getHoldings().holdings.firstOrNull { it.symbol == symbol }?.quantity ?: BigDecimal.ZERO
+
+    private data class TrackedOrder(
+        val order: OrderResponse,
+        val baselineQty: BigDecimal,
+        val date: LocalDate,
+    )
 
     private fun accountParams(): Map<String, String> =
         mapOf("CANO" to properties.cano, "ACNT_PRDT_CD" to properties.acntPrdtCd)

@@ -27,4 +27,10 @@ data class BrokerCapabilities(
     val nativeBracket: Boolean,
     /** 소수점 주식 거래 지원 여부 */
     val fractionalShares: Boolean,
+    /**
+     * 서버가 미체결 주문 목록 조회를 제공하는지.
+     * false 면 어댑터가 메모리에서 자체 추적한다 — 앱 재시작 시 추적이 끊기므로
+     * 재시작 후 서버에 남아있을 수 있는 미체결 주문은 보이지 않는다.
+     */
+    val serverOpenOrders: Boolean = true,
 )

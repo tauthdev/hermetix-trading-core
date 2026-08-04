@@ -12,7 +12,7 @@
 
 ---
 
-## Phase A — 코어 재편 (0.5.x) 🚧 진행 중
+## Phase A — 코어 재편 (0.5.x) ✅ 완료
 
 - [x] `hermetix-broker` / `hermetix-engine` 모듈 분리 — 봇 없이 연결 계층만 쓰는 사용자(시세 수집, 대시보드, 알림) 지원
 - [x] `BrokerCapabilities` 선언 — 캔들 주기, clientOrderId, 네이티브 브라켓 등을 코드로 선언하고 엔진이 적응. 기동 시 전략-브로커 호환성 검증 (fail-fast)
