@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar
+from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
@@ -149,7 +149,7 @@ class KiwoomClient(BrokerClient):
             "dmst_stex_tp": "KRX",
             "stk_cd": request.symbol,
             "ord_qty": str(request.quantity),
-            "ord_uv": str(request.limit_price) if is_limit else "",
+            "ord_uv": str(krx_tick_round(request.limit_price)) if is_limit else "",
             "trde_tp": "0" if is_limit else "3",
             "cond_uv": "",
         })

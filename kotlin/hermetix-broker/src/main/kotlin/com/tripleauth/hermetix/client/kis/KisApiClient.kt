@@ -10,6 +10,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
+import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
 import com.tripleauth.hermetix.client.dto.CalendarResponse
@@ -208,7 +209,8 @@ class KisApiClient(
 
         val trId = if (request.side == OrderSide.BUY) "VTTC0802U" else "VTTC0801U"
         val ordDvsn = if (request.orderType == OrderType.LIMIT) "00" else "01"
-        val price = if (request.orderType == OrderType.LIMIT) request.limitPrice!!.toPlainString() else "0"
+        // KRX 호가단위 보정 - 맞지 않는 지정가는 거래소가 거부한다
+        val price = if (request.orderType == OrderType.LIMIT) KrxTick.round(request.limitPrice!!).toPlainString() else "0"
 
         val output = call(
             HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-cash", trId,

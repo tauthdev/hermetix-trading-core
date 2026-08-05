@@ -10,6 +10,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
+import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
 import com.tripleauth.hermetix.client.dto.CalendarResponse
@@ -192,7 +193,7 @@ class KiwoomApiClient(
                 "dmst_stex_tp" to "KRX",
                 "stk_cd" to request.symbol,
                 "ord_qty" to request.quantity.toPlainString(),
-                "ord_uv" to if (request.orderType == OrderType.LIMIT) request.limitPrice!!.toPlainString() else "",
+                "ord_uv" to if (request.orderType == OrderType.LIMIT) KrxTick.round(request.limitPrice!!).toPlainString() else "",
                 "trde_tp" to if (request.orderType == OrderType.LIMIT) "0" else "3",
                 "cond_uv" to "",
             ),

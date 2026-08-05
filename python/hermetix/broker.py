@@ -150,3 +150,15 @@ def krx_calendar(days: int = 31) -> list[MarketDay]:
             timezone="Asia/Seoul",
         ))
     return result
+
+
+def krx_tick_round(price: Decimal) -> Decimal:
+    """KRX 호가단위 보정 (2023-01 개정) - 유효 호가로 내림."""
+    if price < 2_000: tick = Decimal(1)
+    elif price < 5_000: tick = Decimal(5)
+    elif price < 20_000: tick = Decimal(10)
+    elif price < 50_000: tick = Decimal(50)
+    elif price < 200_000: tick = Decimal(100)
+    elif price < 500_000: tick = Decimal(500)
+    else: tick = Decimal(1_000)
+    return (price // tick) * tick

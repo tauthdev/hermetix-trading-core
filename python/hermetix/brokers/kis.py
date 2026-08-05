@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar
+from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
@@ -170,7 +170,7 @@ class KisClient(BrokerClient):
                          body={**self._acct(), "PDNO": request.symbol,
                                "ORD_DVSN": "00" if is_limit else "01",
                                "ORD_QTY": str(request.quantity),
-                               "ORD_UNPR": str(request.limit_price) if is_limit else "0"})["output"]
+                               "ORD_UNPR": str(krx_tick_round(request.limit_price)) if is_limit else "0"})["output"]
 
         order = Order(
             order_id=out["ODNO"],
