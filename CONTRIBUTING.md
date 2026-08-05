@@ -18,14 +18,21 @@ hermetix-trading-core 는 증권사 모의투자 API(넥스트증권·한국투�
 ```bash
 git clone https://github.com/tauthdev/hermetix-trading-core.git
 cd hermetix-trading-core
-./gradlew build            # 컴파일 + 단위 테스트
+
+# Kotlin (레퍼런스 구현)
+cd kotlin
+./gradlew build                 # 컴파일 + 단위 테스트
 ./gradlew publishToMavenLocal   # 로컬에서 전략 레포와 함께 개발할 때
+
+# Python
+pip install -e './python[dev]'
+pytest python/tests/
 ```
 
 실서버 스모크 테스트(선택)는 모의투자 키가 있어야 합니다:
 
 ```bash
-NEXT_CLIENT_ID=pk_test_... NEXT_CLIENT_SECRET=sk_test_... ./gradlew test --tests '*.RealApiSmokeTest'
+cd kotlin && NEXT_CLIENT_ID=... NEXT_CLIENT_SECRET=... ./gradlew test --tests '*.RealApiSmokeTest'
 ```
 
 ## PR 규칙

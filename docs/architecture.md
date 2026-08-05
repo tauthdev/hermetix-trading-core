@@ -9,12 +9,15 @@
 3. **안전 우선** — 공매도 방지(매도 클램프), 주문 멱등성(clientOrderId), 연속 실패 시 자동 정지. 모의투자라도 폭주하는 봇은 커뮤니티 신뢰를 깎는다
 4. **호스트 앱을 오염시키지 않는다** — 코어의 Jackson 설정, 스케줄러 스레드는 전부 내부 전용. 앱의 전역 빈을 건드리지 않는다 (0.2.1 에서 ObjectMapper 빈 노출을 제거한 이유)
 
-## 모듈 구조 (0.5.0+)
+## 레포 구조 (언어별 모노레포)
 
 ```
-hermetix-broker   <- 연결 계층: BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
-                     Spring 컨테이너 없이도 사용 가능 (어댑터는 일반 생성자 주입)
-hermetix-engine   <- 전략 계층: 전략 SPI + 실행 엔진 + PnL + 자동설정 (broker 에 api 의존)
+kotlin/            <- 레퍼런스 구현 (여기서 브로커 변경을 먼저 실측/수정한다)
+  hermetix-broker  <- 연결 계층: BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
+                      Spring 컨테이너 없이도 사용 가능 (어댑터는 일반 생성자 주입)
+  hermetix-engine  <- 전략 계층: 전략 SPI + 실행 엔진 + PnL + 자동설정 (broker 에 api 의존)
+python/            <- Python 네이티브 구현 (동일 규약, stdlib 만. 골든 픽스처로 동작 일치 보증)
+jitpack.yml        <- JitPack 이 kotlin/ 에서 빌드하도록 지정
 ```
 
 의존성 좌표: `com.github.tauthdev.hermetix-trading-core:hermetix-engine` (봇) 또는 `:hermetix-broker` (연결만).
