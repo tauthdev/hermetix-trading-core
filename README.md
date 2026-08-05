@@ -39,6 +39,7 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 - **소프트웨어 브라켓** — `Signal.Buy(takeProfitPrice=…, stopLossPrice=…)` 한 줄로 익절/손절 자동화
 - **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단)
 - **레이트리밋 내장** — 증권사별 요청 제한을 어댑터가 쓰로틀/백오프로 흡수합니다
+- **KRX 호가단위 자동 보정** — 계산된 지정가를 KRX 가격대별 호가단위(1원~1,000원)에 맞게 어댑터가 보정합니다
 - **수익률 기본 제공** — `GET /pnl` 엔드포인트와 주기 PnL 로그가 모든 봇에 자동 포함됩니다
 - **타입화된 에러** — `MarketClosedError`, `RateLimitError`, `InsufficientFundsError`… 어느 브로커든 같은 방식으로 처리합니다
 
@@ -58,10 +59,10 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (연결 계층이 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.2")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.4")
 
     // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.2")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.4")
 }
 ```
 
