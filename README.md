@@ -44,6 +44,10 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 
 ## 설치
 
+**Python** 은 [python/](python/) 폴더를 보세요 — 같은 브로커/전략 규약의 네이티브 구현입니다 (의존성 0개).
+
+**Kotlin/JVM**:
+
 ```kotlin
 // settings.gradle.kts
 repositories {
