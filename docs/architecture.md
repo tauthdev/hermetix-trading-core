@@ -16,7 +16,10 @@ kotlin/            <- 레퍼런스 구현 (여기서 브로커 변경을 먼저 
   hermetix-broker  <- 연결 계층: BrokerClient/Capabilities/에러 계층 + next/kis/kiwoom 어댑터
                       Spring 컨테이너 없이도 사용 가능 (어댑터는 일반 생성자 주입)
   hermetix-engine  <- 전략 계층: 전략 SPI + 실행 엔진 + PnL + 자동설정 (broker 에 api 의존)
-python/            <- Python 네이티브 구현 (동일 규약, stdlib 만. 골든 픽스처로 동작 일치 보증)
+python/            <- Python 구현 (stdlib 만)
+js/                <- TypeScript 구현 (decimal.js)
+go/                <- Go 구현 (shopspring/decimal)
+                      * 모든 포트는 실측 골든 픽스처 재생 테스트로 레퍼런스와 동작 일치를 보증한다
 jitpack.yml        <- JitPack 이 kotlin/ 에서 빌드하도록 지정
 ```
 

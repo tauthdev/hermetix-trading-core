@@ -11,3 +11,5 @@ application-local.yml
 __pycache__/
 *.egg-info/
 dist/
+js/node_modules/
+js/dist/

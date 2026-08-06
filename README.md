@@ -45,7 +45,14 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 
 ## 설치
 
-**Python** 은 [python/](python/) 폴더를 보세요 — 같은 브로커/전략 규약의 네이티브 구현입니다 (의존성 0개).
+언어별 네이티브 구현이 제공됩니다 — 같은 브로커/전략 규약, 같은 안전장치:
+
+| 언어 | 폴더 | 의존성 |
+|---|---|---|
+| Kotlin/JVM (레퍼런스) | 아래 참조 | Spring Boot |
+| [Python](python/) | `python/` | 0개 (stdlib) |
+| [JavaScript/TypeScript](js/) | `js/` | decimal.js |
+| [Go](go/) | `go/` | shopspring/decimal |
 
 **Kotlin/JVM**:
 

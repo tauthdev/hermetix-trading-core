@@ -1,0 +1,470 @@
+package hermetix
+
+// 한국투자증권(KIS) 모의투자 어댑터 (KRX). 실측 기반 (2026-08).
+//
+//   - 초당 요청 제한 -> 600ms 쓰로틀 + EGW00201 백오프 재시도
+//   - 토큰 발급 1분당 1회 제한 (토큰 24h 캐시)
+//   - 모의 서버는 미체결/체결 조회 미제공 -> 메모리 주문 추적, 체결은 보유수량 변화 근사
+//   - 취소는 지점번호 없이 ODNO 만으로 동작 / 캔들은 일봉만 / 지정가는 호가단위 보정
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+type kisTracked struct {
+	order       Order
+	baselineQty decimal.Decimal
+	day         string
+}
+
+type KisClient struct {
+	appkey, appsecret, cano, acntPrdtCd string
+	baseURL                             string
+	http                                *http.Client
+	throttle                            *throttle
+	tokenMu                             sync.Mutex
+	token                               string
+	tokenExpires                        time.Time
+	trackedMu                           sync.Mutex
+	tracked                             map[string]kisTracked
+	call                                func(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error)
+}
+
+func NewKisClient(appkey, appsecret, cano string) *KisClient {
+	c := &KisClient{
+		appkey: appkey, appsecret: appsecret, cano: cano, acntPrdtCd: "01",
+		baseURL:  "https://openapivts.koreainvestment.com:29443",
+		http:     &http.Client{Timeout: 30 * time.Second},
+		throttle: newThrottle(600 * time.Millisecond),
+		tracked:  map[string]kisTracked{},
+	}
+	c.call = c.request
+	return c
+}
+
+func (c *KisClient) Capabilities() BrokerCapabilities {
+	return BrokerCapabilities{
+		BrokerID: "kis", Market: "KRX", Currency: "KRW",
+		CandleIntervals:  map[CandleInterval]bool{Day1: true},
+		ClientOrderID:    false,
+		NativeBracket:    false,
+		FractionalShares: false,
+		ServerOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
+	}
+}
+
+// ------------------------------------------------------------------- market
+
+func (c *KisClient) GetQuotes(symbols []string) ([]Quote, error) {
+	quotes := make([]Quote, 0, len(symbols))
+	for _, symbol := range symbols {
+		body, err := c.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
+			map[string]string{"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol}, nil)
+		if err != nil {
+			return nil, err
+		}
+		out := obj(body, "output")
+		quote := Quote{
+			Symbol: symbol, Price: d(out["stck_prpr"]),
+			Volume: d(out["acml_vol"]).IntPart(),
+			Change: dOrNil(out["prdy_vrss"]), Timestamp: time.Now(),
+		}
+		if rate := dOrNil(out["prdy_ctrt"]); rate != nil {
+			converted := rate.Div(decimal.NewFromInt(100)) // % -> 비율
+			quote.ChangeRate = &converted
+		}
+		quotes = append(quotes, quote)
+	}
+	return quotes, nil
+}
+
+func (c *KisClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+	if interval != Day1 {
+		return nil, fmt.Errorf("KIS 어댑터는 일봉(1d)만 지원합니다")
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+	today := time.Now().In(kst)
+	start := today.AddDate(0, 0, -(limit*16/10 + 10)) // 휴장일 감안 여유 조회
+	body, err := c.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
+		map[string]string{
+			"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol,
+			"FID_INPUT_DATE_1": start.Format("20060102"), "FID_INPUT_DATE_2": today.Format("20060102"),
+			"FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0",
+		}, nil)
+	if err != nil {
+		return nil, err
+	}
+	candles := make([]Candle, 0)
+	for _, r := range rows(body, "output2") {
+		date := str(r["stck_bsop_date"])
+		if date == "" {
+			continue
+		}
+		ts, err := time.ParseInLocation("20060102", date, kst)
+		if err != nil {
+			continue
+		}
+		candles = append(candles, Candle{
+			Timestamp: ts,
+			Open:      d(r["stck_oprc"]), High: d(r["stck_hgpr"]),
+			Low: d(r["stck_lwpr"]), Close: d(r["stck_clpr"]),
+			Volume: d(r["acml_vol"]).IntPart(),
+		})
+	}
+	// KIS 최신순 -> 과거→최신
+	for i, j := 0, len(candles)-1; i < j; i, j = i+1, j-1 {
+		candles[i], candles[j] = candles[j], candles[i]
+	}
+	if len(candles) > limit {
+		candles = candles[len(candles)-limit:]
+	}
+	return candles, nil
+}
+
+func (c *KisClient) GetCalendar() ([]MarketDay, error) {
+	return krxCalendar(31), nil
+}
+
+// ------------------------------------------------------------------ account
+
+func (c *KisClient) GetAccount() (Account, error) {
+	body, err := c.balance()
+	if err != nil {
+		return Account{}, err
+	}
+	summaries := rows(body, "output2")
+	if len(summaries) == 0 {
+		return Account{}, &BrokerAPIError{200, "", "KIS 잔고 요약(output2)이 비어 있습니다"}
+	}
+	return Account{
+		AccountID: c.cano, Currency: "KRW",
+		Cash: d(summaries[0]["dnca_tot_amt"]), PortfolioValue: d(summaries[0]["tot_evlu_amt"]),
+		Status: "ACTIVE",
+	}, nil
+}
+
+func (c *KisClient) GetHoldings() ([]Holding, error) {
+	body, err := c.balance()
+	if err != nil {
+		return nil, err
+	}
+	holdings := make([]Holding, 0)
+	for _, row := range rows(body, "output1") {
+		qty := d(row["hldg_qty"])
+		if !qty.IsPositive() {
+			continue
+		}
+		holding := Holding{
+			Symbol: str(row["pdno"]), Quantity: qty, AvgEntryPrice: d(row["pchs_avg_pric"]),
+			CurrentPrice: dOrNil(row["prpr"]), MarketValue: dOrNil(row["evlu_amt"]),
+			UnrealizedPnl: dOrNil(row["evlu_pfls_amt"]),
+		}
+		if rate := dOrNil(row["evlu_pfls_rt"]); rate != nil {
+			converted := rate.Div(decimal.NewFromInt(100))
+			holding.UnrealizedPnlRate = &converted
+		}
+		holdings = append(holdings, holding)
+	}
+	return holdings, nil
+}
+
+func (c *KisClient) GetBuyingPower() (decimal.Decimal, error) {
+	query := c.acct()
+	query["PDNO"] = "005930"
+	query["ORD_UNPR"] = ""
+	query["ORD_DVSN"] = "01"
+	query["CMA_EVLU_AMT_ICLD_YN"] = "N"
+	query["OVRS_ICLD_YN"] = "N"
+	body, err := c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R", query, nil)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return d(obj(body, "output")["ord_psbl_cash"]), nil
+}
+
+// ------------------------------------------------------------------- orders
+
+func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+	trID := "VTTC0801U"
+	if request.Side == Buy {
+		trID = "VTTC0802U"
+	}
+	isLimit := request.OrderType == Limit
+	price := "0"
+	if isLimit {
+		price = KrxTickRound(*request.LimitPrice).String() // 호가단위 보정
+	}
+	ordDvsn := "01"
+	if isLimit {
+		ordDvsn = "00"
+	}
+	payload := c.acct()
+	payload["PDNO"] = request.Symbol
+	payload["ORD_DVSN"] = ordDvsn
+	payload["ORD_QTY"] = request.Quantity.String()
+	payload["ORD_UNPR"] = price
+
+	baseline, err := c.holdingQty(request.Symbol)
+	if err != nil {
+		return Order{}, err
+	}
+	body, err := c.call("POST", "/uapi/domestic-stock/v1/trading/order-cash", trID, nil, payload)
+	if err != nil {
+		return Order{}, err
+	}
+	now := time.Now()
+	zero := decimal.Zero
+	order := Order{
+		OrderID: str(obj(body, "output")["ODNO"]), Status: Submitted,
+		Symbol: request.Symbol, Side: request.Side, OrderType: request.OrderType,
+		Quantity: &request.Quantity, LimitPrice: request.LimitPrice,
+		FilledQuantity: &zero, SubmittedAt: &now,
+	}
+	c.trackedMu.Lock()
+	c.tracked[order.OrderID] = kisTracked{order: order, baselineQty: baseline, day: time.Now().In(kst).Format("2006-01-02")}
+	c.trackedMu.Unlock()
+	return order, nil
+}
+
+func (c *KisClient) GetOrders() ([]Order, error) {
+	if err := c.refreshTracked(); err != nil {
+		return nil, err
+	}
+	c.trackedMu.Lock()
+	defer c.trackedMu.Unlock()
+	orders := make([]Order, 0)
+	for _, t := range c.tracked {
+		if t.order.Status.IsOpen() {
+			orders = append(orders, t.order)
+		}
+	}
+	return orders, nil
+}
+
+func (c *KisClient) GetOrder(orderID string) (Order, error) {
+	if err := c.refreshTracked(); err != nil {
+		return Order{}, err
+	}
+	c.trackedMu.Lock()
+	defer c.trackedMu.Unlock()
+	if t, ok := c.tracked[orderID]; ok {
+		return t.order, nil
+	}
+	// 추적 밖(재시작 등)은 알 수 없어 취소로 간주
+	return Order{OrderID: orderID, Status: Canceled}, nil
+}
+
+func (c *KisClient) CancelOrder(orderID string) (Order, error) {
+	// 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
+	payload := c.acct()
+	payload["KRX_FWDG_ORD_ORGNO"] = ""
+	payload["ORGN_ODNO"] = orderID
+	payload["ORD_DVSN"] = "00"
+	payload["RVSE_CNCL_DVSN_CD"] = "02"
+	payload["ORD_QTY"] = "0"
+	payload["ORD_UNPR"] = "0"
+	payload["QTY_ALL_ORD_YN"] = "Y"
+	if _, err := c.call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U", nil, payload); err != nil {
+		return Order{}, err
+	}
+	now := time.Now()
+	c.trackedMu.Lock()
+	if t, ok := c.tracked[orderID]; ok {
+		t.order.Status = Canceled
+		t.order.CanceledAt = &now
+		c.tracked[orderID] = t
+	}
+	c.trackedMu.Unlock()
+	return Order{OrderID: orderID, Status: Canceled, CanceledAt: &now}, nil
+}
+
+func (c *KisClient) GetFills() ([]Fill, error) {
+	if err := c.refreshTracked(); err != nil {
+		return nil, err
+	}
+	c.trackedMu.Lock()
+	defer c.trackedMu.Unlock()
+	fills := make([]Fill, 0)
+	for _, t := range c.tracked {
+		if t.order.Status == Filled {
+			fills = append(fills, Fill{
+				FillID: t.order.OrderID, OrderID: t.order.OrderID, Symbol: t.order.Symbol,
+				Side: t.order.Side, Quantity: t.order.Quantity, Price: t.order.LimitPrice,
+			})
+		}
+	}
+	return fills, nil
+}
+
+// ----------------------------------------------------------------- internal
+
+// refreshTracked - 추적 중인 미체결의 체결 여부를 보유수량 변화로 판정 (모의 서버 제약의 근사).
+func (c *KisClient) refreshTracked() error {
+	today := time.Now().In(kst).Format("2006-01-02")
+	c.trackedMu.Lock()
+	hasOpen := false
+	for id, t := range c.tracked {
+		if t.day != today {
+			delete(c.tracked, id) // DAY 주문 - 날짜가 바뀌면 소멸
+			continue
+		}
+		if t.order.Status.IsOpen() {
+			hasOpen = true
+		}
+	}
+	c.trackedMu.Unlock()
+	if !hasOpen {
+		return nil
+	}
+
+	holdings, err := c.GetHoldings()
+	if err != nil {
+		return err
+	}
+	bySymbol := map[string]decimal.Decimal{}
+	for _, h := range holdings {
+		bySymbol[h.Symbol] = h.Quantity
+	}
+
+	c.trackedMu.Lock()
+	defer c.trackedMu.Unlock()
+	for id, t := range c.tracked {
+		if !t.order.Status.IsOpen() {
+			continue
+		}
+		current := bySymbol[t.order.Symbol]
+		qty := decimal.Zero
+		if t.order.Quantity != nil {
+			qty = *t.order.Quantity
+		}
+		filled := false
+		if t.order.Side == Buy {
+			filled = current.GreaterThanOrEqual(t.baselineQty.Add(qty))
+		} else {
+			filled = current.LessThanOrEqual(t.baselineQty.Sub(qty))
+		}
+		if filled {
+			t.order.Status = Filled
+			t.order.FilledQuantity = &qty
+			c.tracked[id] = t
+		}
+	}
+	return nil
+}
+
+func (c *KisClient) holdingQty(symbol string) (decimal.Decimal, error) {
+	holdings, err := c.GetHoldings()
+	if err != nil {
+		return decimal.Zero, err
+	}
+	for _, h := range holdings {
+		if h.Symbol == symbol {
+			return h.Quantity, nil
+		}
+	}
+	return decimal.Zero, nil
+}
+
+func (c *KisClient) balance() (map[string]any, error) {
+	query := c.acct()
+	for k, v := range map[string]string{
+		"AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02", "UNPR_DVSN": "01",
+		"FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
+		"CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+	} {
+		query[k] = v
+	}
+	return c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", "VTTC8434R", query, nil)
+}
+
+func (c *KisClient) acct() map[string]string {
+	return map[string]string{"CANO": c.cano, "ACNT_PRDT_CD": c.acntPrdtCd}
+}
+
+func (c *KisClient) request(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error) {
+	for attempt := 0; ; attempt++ {
+		body, err := c.requestOnce(method, path, trID, query, jsonBody)
+		var rateLimited *RateLimitError
+		if errors.As(err, &rateLimited) && attempt < 3 {
+			time.Sleep(time.Duration(attempt+1) * time.Second) // 초당 요청 제한 백오프
+			continue
+		}
+		return body, err
+	}
+}
+
+func (c *KisClient) requestOnce(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error) {
+	c.throttle.wait()
+	token, err := c.getToken()
+	if err != nil {
+		return nil, err
+	}
+	rawURL := c.baseURL + path
+	if query != nil {
+		rawURL += "?" + encodeQuery(query)
+	}
+	headers := map[string]string{
+		"Content-Type": "application/json; charset=utf-8",
+		"authorization": "Bearer " + token,
+		"appkey":        c.appkey, "appsecret": c.appsecret,
+		"tr_id": trID, "custtype": "P",
+	}
+	var payload []byte
+	if jsonBody != nil {
+		payload, _ = json.Marshal(jsonBody)
+	}
+	status, body, err := httpJSON(c.http, method, rawURL, headers, payload)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 || str(body["rt_cd"]) != "0" {
+		code := str(body["msg_cd"])
+		msg := strings.TrimSpace(fmt.Sprintf("KIS(%s) %s", trID, str(body["msg1"])))
+		switch {
+		case code == "EGW00201":
+			return nil, newRateLimitError(status, code, msg)
+		case strings.Contains(msg, "장종료") || strings.Contains(msg, "장운영일이 아닙"):
+			return nil, newMarketClosedError(status, code, msg)
+		case status == 401:
+			return nil, newAuthError(status, code, msg)
+		default:
+			return nil, &BrokerAPIError{status, code, msg}
+		}
+	}
+	return body, nil
+}
+
+func (c *KisClient) getToken() (string, error) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
+		return c.token, nil
+	}
+	c.throttle.wait()
+	payload, _ := json.Marshal(map[string]string{
+		"grant_type": "client_credentials", "appkey": c.appkey, "appsecret": c.appsecret,
+	})
+	status, body, err := httpJSON(c.http, "POST", c.baseURL+"/oauth2/tokenP",
+		map[string]string{"Content-Type": "application/json"}, payload)
+	if err != nil {
+		return "", err
+	}
+	token := str(body["access_token"])
+	if status != 200 || token == "" {
+		return "", newAuthError(status, str(body["error_code"]),
+			"KIS 토큰 발급 실패: "+str(body["error_description"])+" (발급은 1분당 1회 제한)")
+	}
+	c.token = token
+	c.tokenExpires = time.Now().Add(time.Duration(d(body["expires_in"]).IntPart()) * time.Second)
+	return c.token, nil
+}
