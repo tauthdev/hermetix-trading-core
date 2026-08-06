@@ -64,6 +64,16 @@ hermetix/
 └── engine.py     StrategyEngine/브라켓/비상정지/PnL
 ```
 
+## 공식 전략 예제 (examples/)
+
+Kotlin 전략 레포 3종과 동일 로직의 실행 가능한 단일 파일:
+
+| 파일 | 전략 | 실행 |
+|---|---|---|
+| `examples/larry.py` | 변동성 돌파 | `HERMETIX_BROKER=next NEXT_CLIENT_ID=... python examples/larry.py` |
+| `examples/trend_breakout.py` | WMA 추세선 돌파 | 동일 |
+| `examples/grid.py` | 목표가 스캘핑 (KRX 호환) | `HERMETIX_BROKER=kis KIS_APPKEY=... python examples/grid.py` |
+
 ## 테스트
 
 ```bash

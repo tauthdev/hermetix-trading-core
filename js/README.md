@@ -34,6 +34,16 @@ new KisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, 일봉만)
 new KiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 
+## 공식 전략 예제 (examples/)
+
+Kotlin 전략 레포 3종과 동일 로직:
+
+```bash
+npm run build
+HERMETIX_BROKER=next NEXT_CLIENT_ID=... node dist/examples/larry.js
+HERMETIX_BROKER=kis  KIS_APPKEY=...     node dist/examples/grid.js   # KRX 호환
+```
+
 ## 테스트
 
 ```bash

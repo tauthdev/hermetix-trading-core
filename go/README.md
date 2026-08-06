@@ -44,6 +44,15 @@ hermetix.NewKisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, �
 hermetix.NewKiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 
+## 공식 전략 예제 (examples/)
+
+Kotlin 전략 레포 3종과 동일 로직 (`examples` 패키지, 임포트 가능):
+
+```bash
+HERMETIX_BROKER=next NEXT_CLIENT_ID=... go run ./cmd/example larry
+HERMETIX_BROKER=kis  KIS_APPKEY=...     go run ./cmd/example grid   # KRX 호환
+```
+
 ## 테스트
 
 ```bash
