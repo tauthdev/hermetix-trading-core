@@ -60,27 +60,36 @@ data class SessionHours(
     val end: String,
 )
 
+/** 환율 (넥스트증권 v1.3 — 하나은행 고시). 넥스트 전용 확장 API */
 data class ExchangeRateResponse(
     val baseCurrency: String,
     val quoteCurrency: String,
-    val rate: BigDecimal,
-    val rateChangeType: String?,
-    val validFrom: Instant?,
-    val validUntil: Instant?,
+    /** 고객이 외화를 팔 때 적용되는 환율 */
+    val bidRate: BigDecimal,
+    /** 고객이 외화를 살 때 적용되는 환율 */
+    val askRate: BigDecimal,
+    val requestedAt: Instant?,
 )
 
 data class InstrumentsResponse(
     val instruments: List<Instrument>,
-    val nextCursor: String?,
 )
 
+/**
+ * 종목 (넥스트증권 v1.3). `tradable` 은 서버의 거래 가능 상태(TRADABLE · SELL_ONLY · BUY_ONLY · SUSPENDED)를
+ * 편의상 Boolean 으로 요약한 값이고, 원본 상태는 [tradableStatus] 에 있다.
+ */
 data class Instrument(
     val symbol: String,
     val name: String,
+    /** COMMON_STOCK · PREFERRED_STOCK · DR · ETF */
     val type: String?,
     val exchange: String?,
     val currency: String?,
     val tradable: Boolean,
+    val tradableStatus: String?,
+    /** 주간거래(DAY 세션) 가능 여부 */
+    val dayMarketTradable: Boolean?,
 )
 
 data class InstrumentDetailResponse(
@@ -90,11 +99,6 @@ data class InstrumentDetailResponse(
     val exchange: String?,
     val currency: String?,
     val tradable: Boolean,
-    val fractionable: Boolean?,
-    val shortable: Boolean?,
-    val easyToBorrow: Boolean?,
-    val marginable: Boolean?,
-    val minOrderSize: BigDecimal?,
-    val status: String?,
-    val restrictions: List<String> = emptyList(),
+    val tradableStatus: String?,
+    val dayMarketTradable: Boolean?,
 )

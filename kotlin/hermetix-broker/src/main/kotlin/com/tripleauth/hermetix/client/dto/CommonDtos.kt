@@ -8,6 +8,12 @@ data class TokenResponse(
     @JsonProperty("expires_in") val expiresIn: Long,
 )
 
+/** 토큰 발급 API(400/401) 전용 OAuth 표준 에러 형식 — 다른 API 의 [ApiErrorEnvelope] 와 다르다 */
+data class OAuthErrorResponse(
+    @JsonProperty("error") val error: String?,
+    @JsonProperty("error_description") val errorDescription: String?,
+)
+
 data class ApiErrorEnvelope(
     val error: ApiError,
 )

@@ -4,6 +4,7 @@ package hermetix
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -17,18 +18,25 @@ func stubCalls(responses []map[string]any) func() map[string]any {
 	}
 }
 
+// v1.3: outcome=OK 만 공통 모델로, 등락률 % → 비율, KST 시각 파싱
 func TestNextQuoteParsing(t *testing.T) {
 	c := NewNextClient("k", "s")
 	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
-		return map[string]any{"quotes": []any{map[string]any{
-			"symbol": "AAPL", "price": "308.91", "bidPrice": nil, "askPrice": nil,
-			"volume": float64(132756799), "change": "-24.52", "changeRate": "-0.073539",
-			"timestamp": "2026-07-31T04:00:00Z",
-		}}}, nil
+		return map[string]any{"quotes": []any{
+			map[string]any{
+				"symbol": "AAPL", "outcome": "OK", "session": "REGULAR", "requestedAt": "2026-09-10T23:10:00+09:00",
+				"price": "308.91", "previousClose": "333.43", "change": "-24.52", "changeRate": "-7.3539",
+				"bidPrice": nil, "askPrice": nil, "volume": "132756799", "lastTradeAt": "2026-09-10T23:09:58+09:00",
+			},
+			map[string]any{"symbol": "NOPE", "outcome": "NOT_FOUND", "session": "CLOSED", "requestedAt": "2026-09-10T23:10:00+09:00"},
+		}}, nil
 	}
-	quotes, err := c.GetQuotes([]string{"AAPL"})
+	quotes, err := c.GetQuotes([]string{"AAPL", "NOPE"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(quotes) != 1 || quotes[0].Symbol != "AAPL" {
+		t.Fatalf("NOT_FOUND 종목은 제외돼야 한다: %+v", quotes)
 	}
 	if quotes[0].Price.String() != "308.91" {
 		t.Fatalf("price = %s", quotes[0].Price)
@@ -38,6 +46,116 @@ func TestNextQuoteParsing(t *testing.T) {
 	}
 	if quotes[0].ChangeRate.String() != "-0.073539" {
 		t.Fatalf("changeRate = %s", quotes[0].ChangeRate)
+	}
+	if quotes[0].Volume != 132756799 {
+		t.Fatalf("volume = %d", quotes[0].Volume)
+	}
+	if got := quotes[0].Timestamp.UTC().Format(time.RFC3339); got != "2026-09-10T14:09:58Z" {
+		t.Fatalf("timestamp = %s", got)
+	}
+}
+
+func TestNextCandleTimeWithoutOffsetIsKST(t *testing.T) {
+	c := NewNextClient("k", "s")
+	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
+		return map[string]any{"symbol": "AAPL", "interval": "1d", "candles": []any{map[string]any{
+			"time": "2026-09-09T22:30:00", "session": "REGULAR", "open": "339.73", "high": "344.56",
+			"low": "337.35", "close": "338.19", "volume": "56298904",
+		}}}, nil
+	}
+	candles, err := c.GetCandles("AAPL", Day1, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := candles[0].Timestamp.UTC().Format(time.RFC3339); got != "2026-09-09T13:30:00Z" {
+		t.Fatalf("timestamp = %s", got)
+	}
+}
+
+func TestNextCalendarKSTToNewYork(t *testing.T) {
+	c := NewNextClient("k", "s")
+	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
+		return map[string]any{"calendar": []any{
+			map[string]any{"date": "2026-09-10", "status": "OPEN", "holidayName": nil, "sessions": []any{
+				map[string]any{"type": "PRE", "open": "2026-09-10T17:00:00+09:00", "close": "2026-09-10T22:30:00+09:00"},
+				map[string]any{"type": "REGULAR", "open": "2026-09-10T22:30:00+09:00", "close": "2026-09-11T05:00:00+09:00"},
+			}},
+			map[string]any{"date": "2026-11-27", "status": "HALF_DAY", "holidayName": "Day After Thanksgiving", "sessions": []any{
+				map[string]any{"type": "REGULAR", "open": "2026-11-27T23:30:00+09:00", "close": "2026-11-28T03:00:00+09:00"},
+			}},
+			map[string]any{"date": "2026-12-25", "status": "CLOSED", "holidayName": "Christmas", "sessions": []any{}},
+		}}, nil
+	}
+	days, err := c.GetCalendar()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !days[0].Open || days[0].Timezone != "America/New_York" || days[0].Regular.Start != "09:30" || days[0].Regular.End != "16:00" {
+		t.Fatalf("day0 = %+v regular=%+v", days[0], days[0].Regular)
+	}
+	if !days[1].Open || days[1].Regular.End != "13:00" || days[1].Holiday != "Day After Thanksgiving" {
+		t.Fatalf("half day = %+v regular=%+v", days[1], days[1].Regular)
+	}
+	if days[2].Open || days[2].Regular != nil {
+		t.Fatalf("closed day = %+v", days[2])
+	}
+}
+
+func TestNextAccountPortfolioValue(t *testing.T) {
+	c := NewNextClient("k", "s")
+	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
+		if path == "/v1/account/holdings" {
+			return map[string]any{"currency": "USD", "holdings": []any{map[string]any{
+				"symbol": "AAPL", "name": "Apple Inc.", "quantity": "2", "sellableQuantity": "2", "averageBuyPrice": "300.00",
+				"currentPrice": "310.00", "purchaseAmount": "600.00", "evaluationAmount": "620.00",
+				"evaluationPnl": "20.00", "evaluationPnlRate": "3.3333",
+			}}}, nil
+		}
+		return map[string]any{"accountId": "acc_main", "currency": "USD", "cashAmount": "1000.50", "requestedAt": "2026-09-10T23:10:00+09:00"}, nil
+	}
+	account, err := c.GetAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Cash.String() != "1000.5" || account.PortfolioValue.String() != "1620.5" {
+		t.Fatalf("account = %+v", account)
+	}
+	holdings, _ := c.GetHoldings()
+	if holdings[0].AvgEntryPrice.String() != "300" || holdings[0].MarketValue.String() != "620" || holdings[0].UnrealizedPnlRate.String() != "0.033333" {
+		t.Fatalf("holding = %+v", holdings[0])
+	}
+}
+
+func TestNextOrderDetailAndCreateBody(t *testing.T) {
+	c := NewNextClient("k", "s")
+	var sent map[string]any
+	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
+		if method == "POST" {
+			sent = jsonBody
+			return map[string]any{"orderId": "ord_2", "market": "US", "status": "SUBMITTED", "requestedAt": "2026-09-10T23:10:00+09:00"}, nil
+		}
+		return map[string]any{
+			"orderId": "ord_1", "requestId": "s-1", "market": "US", "symbol": "AAPL", "side": "BUY", "orderType": "LIMIT",
+			"timeInForce": "DAY", "status": "PENDING_CANCEL", "quantity": "10", "filledQuantity": "4", "limitPrice": "200",
+			"requestedAt": "2026-09-10T23:10:00+09:00", "updatedAt": "2026-09-10T23:12:00+09:00",
+		}, nil
+	}
+	order, err := c.GetOrder("ord_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.ClientOrderID != "s-1" || order.Status != PendingCancel || !order.Status.IsOpen() || order.OrderType != Limit {
+		t.Fatalf("order = %+v", order)
+	}
+	if got := order.SubmittedAt.UTC().Format(time.RFC3339); got != "2026-09-10T14:10:00Z" {
+		t.Fatalf("submittedAt = %s", got)
+	}
+	limit := decimal.NewFromInt(200)
+	if _, err := c.CreateOrder(CreateOrderRequest{Symbol: "AAPL", Side: Buy, OrderType: Limit, Quantity: decimal.NewFromInt(1), LimitPrice: &limit, ClientOrderID: "s-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if sent["market"] != "US" || sent["clientOrderId"] != "s-2" || sent["limitPrice"] != "200" || sent["orderType"] != "LIMIT" {
+		t.Fatalf("body = %+v", sent)
 	}
 }
 

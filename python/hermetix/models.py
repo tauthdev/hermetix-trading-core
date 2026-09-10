@@ -33,8 +33,13 @@ class TimeInForce(Enum):
 
 
 class OrderStatus(Enum):
+    """주문 상태 (넥스트증권 공개 스펙 v1.3 부록 D 7종 + UNKNOWN 폴백).
+
+    PENDING_CANCEL 은 취소 접수 후 미확정 상태 — 원주문이 체결될 수 있으므로 OPEN 으로 분류한다.
+    """
     SUBMITTED = "SUBMITTED"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    PENDING_CANCEL = "PENDING_CANCEL"
     FILLED = "FILLED"
     CANCELED = "CANCELED"
     REJECTED = "REJECTED"
@@ -43,7 +48,7 @@ class OrderStatus(Enum):
 
     @property
     def is_open(self) -> bool:
-        return self in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)
+        return self in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_CANCEL)
 
 
 @dataclass(frozen=True)

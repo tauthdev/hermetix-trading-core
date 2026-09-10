@@ -25,7 +25,7 @@
 override val spec = StrategySpec(
     name = "my-strategy",              // 필수. clientOrderId 프리픽스 (영문/숫자/하이픈)
     symbols = listOf("AAPL", "TSLA"),  // 감시 종목. quotes/candles 가 이 종목들로 공급됨
-    candleInterval = CandleInterval.HOUR_1,  // 1m / 5m / 1h / 1d
+    candleInterval = CandleInterval.DAY_1,   // 브로커별 지원 주기가 다르다 — next: 1m/1d, kis/kiwoom: 1d (BrokerCapabilities)
     candleLimit = 50,                  // 공급받을 캔들 개수
     pollInterval = Duration.ofSeconds(60),
     regularHoursOnly = true,           // false 면 폐장 중에도 호출됨 (주문은 체결 안 됨에 유의)

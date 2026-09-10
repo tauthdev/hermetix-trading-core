@@ -39,11 +39,14 @@ const (
 	GTC TimeInForce = "GTC"
 )
 
+// OrderStatus 는 주문 상태다 (넥스트증권 공개 스펙 v1.3 부록 D 7종 + Unknown 폴백).
+// PendingCancel 은 취소 접수 후 미확정 — 원주문이 체결될 수 있으므로 OPEN 으로 분류한다.
 type OrderStatus string
 
 const (
 	Submitted       OrderStatus = "SUBMITTED"
 	PartiallyFilled OrderStatus = "PARTIALLY_FILLED"
+	PendingCancel   OrderStatus = "PENDING_CANCEL"
 	Filled          OrderStatus = "FILLED"
 	Canceled        OrderStatus = "CANCELED"
 	Rejected        OrderStatus = "REJECTED"
@@ -52,7 +55,7 @@ const (
 )
 
 func (s OrderStatus) IsOpen() bool {
-	return s == Submitted || s == PartiallyFilled
+	return s == Submitted || s == PartiallyFilled || s == PendingCancel
 }
 
 type Quote struct {

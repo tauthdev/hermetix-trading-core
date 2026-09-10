@@ -1,24 +1,163 @@
 /** 어댑터 정규화 검증 - 실측 골든 픽스처 재생 (Kotlin/Python 과 동일 정답지). */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Decimal, KisClient, KiwoomClient, NextClient, krxTickRound } from "../src/index.js";
+import { AuthError, Decimal, KisClient, KiwoomClient, NextClient, isOpenStatus, krxTickRound } from "../src/index.js";
 
 const stub = (responses: Record<string, unknown>[]) => {
   const queue = [...responses];
   return async () => queue.shift()!;
 };
 
-test("next: quote 파싱 (2026-08-03 실측)", async () => {
+test("next: quote 파싱 (v1.3 — outcome=OK 만, 등락률 %→비율, KST 시각)", async () => {
   const client = new NextClient("k", "s");
   (client as any).request = stub([{
-    quotes: [{ symbol: "AAPL", price: "308.91", bidPrice: null, askPrice: null,
-               volume: 132756799, change: "-24.52", changeRate: "-0.073539",
-               timestamp: "2026-07-31T04:00:00Z" }],
+    quotes: [
+      { symbol: "AAPL", outcome: "OK", session: "REGULAR", requestedAt: "2026-09-10T23:10:00+09:00",
+        price: "308.91", previousClose: "333.43", change: "-24.52", changeRate: "-7.3539",
+        bidPrice: null, bidSize: null, askPrice: null, askSize: null,
+        volume: "132756799", lastTradeAt: "2026-09-10T23:09:58+09:00" },
+      { symbol: "NOPE", outcome: "NOT_FOUND", session: "CLOSED", requestedAt: "2026-09-10T23:10:00+09:00" },
+    ],
   }]);
-  const [q] = await client.getQuotes(["AAPL"]);
+  const quotes = await client.getQuotes(["AAPL", "NOPE"]);
+  assert.deepEqual(quotes.map((q) => q.symbol), ["AAPL"]);
+  const [q] = quotes;
   assert.equal(q.price.toString(), "308.91");
   assert.equal(q.bidPrice, null);
   assert.equal(q.changeRate!.toString(), "-0.073539");
+  assert.equal(q.volume, 132756799);
+  assert.equal(q.timestamp.toISOString(), "2026-09-10T14:09:58.000Z");
+});
+
+test("next: 캔들 time 에 오프셋이 없으면 KST 로 해석", async () => {
+  const client = new NextClient("k", "s");
+  (client as any).request = stub([{
+    symbol: "AAPL", interval: "1d", nextCursor: null,
+    candles: [{ time: "2026-09-09T22:30:00", session: "REGULAR", open: "339.73", high: "344.56",
+                low: "337.35", close: "338.19", volume: "56298904" }],
+  }]);
+  const [c] = await client.getCandles("AAPL", "1d", 3);
+  assert.equal(c.timestamp.toISOString(), "2026-09-09T13:30:00.000Z");
+  assert.equal(c.volume, 56298904);
+});
+
+test("next: 캘린더 KST 세션 → 뉴욕 현지 HH:mm, status → open", async () => {
+  const client = new NextClient("k", "s");
+  (client as any).request = stub([{
+    calendar: [
+      { date: "2026-09-10", status: "OPEN", holidayName: null, sessions: [
+        { type: "PRE", open: "2026-09-10T17:00:00+09:00", close: "2026-09-10T22:30:00+09:00" },
+        { type: "REGULAR", open: "2026-09-10T22:30:00+09:00", close: "2026-09-11T05:00:00+09:00" }] },
+      { date: "2026-11-27", status: "HALF_DAY", holidayName: "Day After Thanksgiving", sessions: [
+        { type: "REGULAR", open: "2026-11-27T23:30:00+09:00", close: "2026-11-28T03:00:00+09:00" }] },
+      { date: "2026-12-25", status: "CLOSED", holidayName: "Christmas", sessions: [] },
+    ],
+  }]);
+  const days = await client.getCalendar();
+  assert.equal(days[0].open, true);
+  assert.equal(days[0].timezone, "America/New_York");
+  assert.deepEqual(days[0].regular, { start: "09:30", end: "16:00" });
+  assert.equal(days[1].regular!.end, "13:00"); // 반장일 (EST)
+  assert.equal(days[1].holiday, "Day After Thanksgiving");
+  assert.equal(days[2].open, false);
+  assert.equal(days[2].regular, null);
+});
+
+test("next: 계좌 총평가 = cashAmount + 보유 평가금액, 손익률 %→비율", async () => {
+  const client = new NextClient("k", "s");
+  (client as any).request = stub([
+    { accountId: "acc_main", currency: "USD", cashAmount: "1000.50", requestedAt: "2026-09-10T23:10:00+09:00" },
+    { currency: "USD", holdings: [
+      { symbol: "AAPL", name: "Apple Inc.", quantity: "2", sellableQuantity: "2", averageBuyPrice: "300.00",
+        currentPrice: "310.00", purchaseAmount: "600.00", evaluationAmount: "620.00",
+        evaluationPnl: "20.00", evaluationPnlRate: "3.3333" }], requestedAt: "2026-09-10T23:10:00+09:00" },
+  ]);
+  const account = await client.getAccount();
+  assert.equal(account.cash.toString(), "1000.5");
+  assert.equal(account.portfolioValue.toString(), "1620.5");
+  (client as any).request = stub([
+    { currency: "USD", holdings: [
+      { symbol: "AAPL", name: "Apple Inc.", quantity: "2", averageBuyPrice: "300.00", evaluationAmount: "620.00",
+        evaluationPnl: "20.00", evaluationPnlRate: "3.3333" }] },
+  ]);
+  const [h] = await client.getHoldings();
+  assert.equal(h.avgEntryPrice.toString(), "300");
+  assert.equal(h.marketValue!.toString(), "620");
+  assert.equal(h.unrealizedPnlRate!.toString(), "0.033333");
+});
+
+test("next: 주문 상세 requestId → clientOrderId, 생성 본문에 market·clientOrderId", async () => {
+  const client = new NextClient("k", "s");
+  (client as any).request = stub([{
+    orderId: "ord_1", requestId: "s-1", market: "US", symbol: "AAPL", side: "BUY", orderType: "LIMIT",
+    timeInForce: "DAY", status: "PARTIALLY_FILLED", quantity: "10", filledQuantity: "4", limitPrice: "200",
+    avgFillPrice: "199.5", requestedAt: "2026-09-10T23:10:00+09:00", updatedAt: "2026-09-10T23:12:00+09:00",
+  }]);
+  const order = await client.getOrder("ord_1");
+  assert.equal(order.clientOrderId, "s-1");
+  assert.equal(order.status, "PARTIALLY_FILLED");
+  assert.equal(order.orderType, "LIMIT");
+  assert.equal(order.submittedAt!.toISOString(), "2026-09-10T14:10:00.000Z");
+
+  const sent: Record<string, unknown>[] = [];
+  (client as any).request = async (_m: string, _p: string, opts: { json?: Record<string, unknown> }) => {
+    sent.push(opts.json!);
+    return { orderId: "ord_2", market: "US", status: "SUBMITTED", requestedAt: "2026-09-10T23:10:00+09:00" };
+  };
+  await client.createOrder({ symbol: "AAPL", side: "BUY", orderType: "LIMIT", quantity: new Decimal(1),
+                             limitPrice: new Decimal(200), clientOrderId: "s-2" });
+  assert.equal(sent[0].market, "US");
+  assert.equal(sent[0].clientOrderId, "s-2");
+  assert.equal(sent[0].limitPrice, "200");
+});
+
+test("next: PENDING_CANCEL 은 open 으로 분류 (v1.3 부록 D)", async () => {
+  const client = new NextClient("k", "s");
+  (client as any).request = stub([{
+    orderId: "ord_1", status: "PENDING_CANCEL", symbol: "AAPL", side: "BUY",
+    orderType: "LIMIT", quantity: "1", limitPrice: "200", filledQuantity: "0",
+  }]);
+  const order = await client.cancelOrder("ord_1");
+  assert.equal(order.status, "PENDING_CANCEL");
+  assert.equal(isOpenStatus(order.status), true);
+});
+
+test("next: v1.3 공통 헤더 (X-Request-Id, X-Next-Account-Id)", async () => {
+  const seen: { url: string; headers: Record<string, string> }[] = [];
+  const restore = (globalThis as any).fetch;
+  (globalThis as any).fetch = async (url: string, init: { headers: Record<string, string> }) => {
+    seen.push({ url, headers: init.headers });
+    const body = url.endsWith("/v1/oauth/token")
+      ? { access_token: "tok", token_type: "Bearer", expires_in: 43200 }
+      : url.endsWith("/v1/account/holdings")
+        ? { currency: "USD", holdings: [] }
+        : { accountId: "acc_main", currency: "USD", cashAmount: "1" };
+    return { status: 200, text: async () => JSON.stringify(body) };
+  };
+  try {
+    const client = new NextClient("k", "s", "acc_main", "http://next.test");
+    await client.getAccount();
+  } finally {
+    (globalThis as any).fetch = restore;
+  }
+  const [, account] = seen;
+  assert.equal(account.headers["X-Next-Account-Id"], "acc_main");
+  assert.equal(account.headers["X-Nextsecurities-Account"], undefined);
+  assert.match(account.headers["X-Request-Id"], /^[A-Za-z0-9._-]{1,64}$/);
+});
+
+test("next: 토큰 발급 실패는 OAuth 표준 에러 형식", async () => {
+  const restore = (globalThis as any).fetch;
+  (globalThis as any).fetch = async () => ({
+    status: 401, text: async () => JSON.stringify({ error: "invalid_client", error_description: "인증 실패" }),
+  });
+  try {
+    const client = new NextClient("k", "s", "acc_main", "http://next.test");
+    await assert.rejects(client.getQuotes(["AAPL"]), (e: any) =>
+      e instanceof AuthError && e.errorCode === "invalid_client" && String(e.message).includes("인증 실패"));
+  } finally {
+    (globalThis as any).fetch = restore;
+  }
 });
 
 test("kis: %단위 등락률 -> 비율", async () => {

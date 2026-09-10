@@ -4,7 +4,7 @@ Kotlin 레퍼런스 구현과 같은 응답에 같은 정규화 결과가 나와
 """
 from decimal import Decimal
 
-from hermetix import CandleInterval, KisClient, KiwoomClient, NextClient, OrderStatus
+from hermetix import CandleInterval, CreateOrderRequest, KisClient, KiwoomClient, NextClient, OrderStatus
 
 
 def _stub(client, responses):
@@ -19,31 +19,173 @@ def _stub(client, responses):
 # ------------------------------------------------------------------------ next
 
 def test_next_quote_parsing(monkeypatch):
+    # v1.3: outcome=OK 만 공통 모델로, 등락률 % → 비율, 시각 KST → aware datetime
     client = NextClient("k", "s")
     monkeypatch.setattr(client, "_request", _stub(client, [
-        # 2026-08-03 실측 응답
-        {"quotes": [{"symbol": "AAPL", "price": "308.91", "bidPrice": None, "askPrice": None,
-                     "volume": 132756799, "change": "-24.52", "changeRate": "-0.073539",
-                     "timestamp": "2026-07-31T04:00:00Z"}]},
+        {"quotes": [
+            {"symbol": "AAPL", "outcome": "OK", "session": "REGULAR", "requestedAt": "2026-09-10T23:10:00+09:00",
+             "price": "308.91", "previousClose": "333.43", "change": "-24.52", "changeRate": "-7.3539",
+             "bidPrice": None, "bidSize": None, "askPrice": None, "askSize": None,
+             "volume": "132756799", "lastTradeAt": "2026-09-10T23:09:58+09:00"},
+            {"symbol": "NOPE", "outcome": "NOT_FOUND", "session": "CLOSED", "requestedAt": "2026-09-10T23:10:00+09:00"},
+        ]},
     ]))
-    q = client.get_quotes(["AAPL"])[0]
+    quotes = client.get_quotes(["AAPL", "NOPE"])
+    assert [q.symbol for q in quotes] == ["AAPL"]
+    q = quotes[0]
     assert q.price == Decimal("308.91")
     assert q.bid_price is None
     assert q.change_rate == Decimal("-0.073539")
     assert q.volume == 132756799
+    assert q.timestamp.utcoffset().total_seconds() == 9 * 3600
+    assert q.timestamp.isoformat() == "2026-09-10T23:09:58+09:00"
+
+
+def test_next_candle_time_without_offset_is_kst(monkeypatch):
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client, "_request", _stub(client, [
+        {"symbol": "AAPL", "interval": "1d", "candles": [
+            {"time": "2026-09-09T22:30:00", "session": "REGULAR", "open": "339.73", "high": "344.56",
+             "low": "337.35", "close": "338.19", "volume": "56298904"}], "nextCursor": None},
+    ]))
+    c = client.get_candles("AAPL", CandleInterval.DAY_1, 3)[0]
+    assert c.timestamp.isoformat() == "2026-09-09T22:30:00+09:00"
+    assert c.volume == 56298904
+
+
+def test_next_calendar_kst_sessions_to_new_york_clock(monkeypatch):
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client, "_request", _stub(client, [
+        {"calendar": [
+            {"date": "2026-09-10", "status": "OPEN", "holidayName": None, "sessions": [
+                {"type": "PRE", "open": "2026-09-10T17:00:00+09:00", "close": "2026-09-10T22:30:00+09:00"},
+                {"type": "REGULAR", "open": "2026-09-10T22:30:00+09:00", "close": "2026-09-11T05:00:00+09:00"}]},
+            {"date": "2026-11-27", "status": "HALF_DAY", "holidayName": "Day After Thanksgiving", "sessions": [
+                {"type": "REGULAR", "open": "2026-11-27T23:30:00+09:00", "close": "2026-11-28T03:00:00+09:00"}]},
+            {"date": "2026-12-25", "status": "CLOSED", "holidayName": "Christmas", "sessions": []},
+        ]},
+    ]))
+    days = client.get_calendar()
+    assert days[0].open and days[0].timezone == "America/New_York"
+    assert (days[0].regular.start, days[0].regular.end) == ("09:30", "16:00")
+    assert days[1].open and days[1].regular.end == "13:00"  # 반장일 (EST)
+    assert days[1].holiday == "Day After Thanksgiving"
+    assert not days[2].open and days[2].regular is None
+
+
+def test_next_account_portfolio_value_is_cash_plus_holdings(monkeypatch):
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client, "_request", _stub(client, [
+        {"accountId": "acc_main", "currency": "USD", "cashAmount": "1000.50", "requestedAt": "2026-09-10T23:10:00+09:00"},
+        {"currency": "USD", "holdings": [
+            {"symbol": "AAPL", "name": "Apple Inc.", "quantity": "2", "sellableQuantity": "2", "averageBuyPrice": "300.00",
+             "currentPrice": "310.00", "purchaseAmount": "600.00", "evaluationAmount": "620.00",
+             "evaluationPnl": "20.00", "evaluationPnlRate": "3.3333"}], "requestedAt": "2026-09-10T23:10:00+09:00"},
+    ]))
+    account = client.get_account()
+    assert account.cash == Decimal("1000.50")
+    assert account.portfolio_value == Decimal("1620.50")
+
+
+def test_next_holdings_mapping(monkeypatch):
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client, "_request", _stub(client, [
+        {"currency": "USD", "holdings": [
+            {"symbol": "AAPL", "name": "Apple Inc.", "quantity": "2", "sellableQuantity": "1", "averageBuyPrice": "300.00",
+             "currentPrice": "310.00", "purchaseAmount": "600.00", "evaluationAmount": "620.00",
+             "evaluationPnl": "20.00", "evaluationPnlRate": "3.3333"}], "requestedAt": "2026-09-10T23:10:00+09:00"},
+    ]))
+    h = client.get_holdings()[0]
+    assert h.avg_entry_price == Decimal("300.00")
+    assert h.market_value == Decimal("620.00")
+    assert h.unrealized_pnl == Decimal("20.00")
+    assert h.unrealized_pnl_rate == Decimal("0.033333")
 
 
 def test_next_order_parsing(monkeypatch):
+    # v1.3 상세: requestId = clientOrderId, requestedAt = 접수 시각
     client = NextClient("k", "s")
     monkeypatch.setattr(client, "_request", _stub(client, [
-        {"orderId": "ord_8615a1f026", "clientOrderId": "smoke-test-001", "status": "SUBMITTED",
-         "symbol": "AAPL", "side": "BUY", "orderType": "LIMIT", "quantity": "1",
-         "limitPrice": "200", "filledQuantity": "0", "submittedAt": "2026-08-03T02:57:33Z"},
+        {"orderId": "ord_8615a1f026", "requestId": "smoke-test-001", "market": "US", "status": "SUBMITTED",
+         "symbol": "AAPL", "side": "BUY", "orderType": "LIMIT", "timeInForce": "DAY", "quantity": "1",
+         "limitPrice": "200", "filledQuantity": "0", "requestedAt": "2026-09-10T23:10:00+09:00",
+         "updatedAt": "2026-09-10T23:10:00+09:00"},
     ]))
     order = client.get_order("ord_8615a1f026")
     assert order.status == OrderStatus.SUBMITTED
     assert order.status.is_open
     assert order.limit_price == Decimal("200")
+    assert order.client_order_id == "smoke-test-001"
+    assert order.submitted_at.isoformat() == "2026-09-10T23:10:00+09:00"
+
+
+def test_next_create_order_sends_v13_body(monkeypatch):
+    from hermetix import OrderSide, OrderType
+    client = NextClient("k", "s")
+    sent: list[dict] = []
+
+    def fake_request(method, path, *, query=None, json_body=None, account=False):
+        sent.append(json_body)
+        return {"orderId": "ord_1", "market": "US", "status": "SUBMITTED", "requestedAt": "2026-09-10T23:10:00+09:00"}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    order = client.create_order(CreateOrderRequest("AAPL", OrderSide.BUY, OrderType.LIMIT, Decimal(1),
+                                                   limit_price=Decimal(200), client_order_id="s-1"))
+    assert order.status == OrderStatus.SUBMITTED
+    body = sent[0]
+    assert body["market"] == "US" and body["clientOrderId"] == "s-1"
+    assert body["orderType"] == "LIMIT" and body["quantity"] == "1" and body["limitPrice"] == "200"
+
+
+def test_next_pending_cancel_is_open(monkeypatch):
+    # v1.3 부록 D: 취소 접수 후 미확정 — 원주문 체결 가능성이 있어 OPEN
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client, "_request", _stub(client, [
+        {"orderId": "ord_1", "status": "PENDING_CANCEL", "symbol": "AAPL", "side": "BUY",
+         "orderType": "LIMIT", "quantity": "1", "limitPrice": "200", "filledQuantity": "0"},
+    ]))
+    order = client.cancel_order("ord_1")
+    assert order.status == OrderStatus.PENDING_CANCEL
+    assert order.status.is_open
+
+
+def test_next_v13_headers(monkeypatch):
+    # v1.3 공통 헤더: X-Request-Id(전 API), X-Next-Account-Id(계좌 그룹)
+    client = NextClient("k", "s", account_id="acc_main")
+    seen: list[dict] = []
+
+    def fake_http(method, path, *, headers=None, query=None, json_body=None, form_body=None):
+        seen.append({"method": method, "path": path, "headers": dict(headers or {})})
+        if path == "/v1/oauth/token":
+            return 200, {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
+        if path == "/v1/account/holdings":
+            return 200, {"currency": "USD", "holdings": []}
+        return 200, {"accountId": "acc_main", "currency": "USD", "cashAmount": "1"}
+
+    monkeypatch.setattr(client._http, "request", fake_http)
+    client.get_account()
+
+    token_call, account_call, _holdings_call = seen
+    assert token_call["path"] == "/v1/oauth/token"
+    assert "X-Nextsecurities-Account" not in account_call["headers"]
+    assert account_call["headers"]["X-Next-Account-Id"] == "acc_main"
+    rid = account_call["headers"]["X-Request-Id"]
+    assert len(rid) <= 64 and all(ch.isalnum() or ch in "._-" for ch in rid)
+
+
+def test_next_token_oauth_error_format(monkeypatch):
+    # 토큰 발급 400/401 만 OAuth 표준 {error, error_description}
+    from hermetix import AuthError
+    client = NextClient("k", "s")
+    monkeypatch.setattr(client._http, "request",
+                        lambda *a, **k: (401, {"error": "invalid_client", "error_description": "인증 실패"}))
+    try:
+        client.get_quotes(["AAPL"])
+    except AuthError as e:
+        assert e.error_code == "invalid_client"
+        assert "인증 실패" in str(e)
+    else:
+        raise AssertionError("AuthError expected")
 
 
 # ------------------------------------------------------------------------- kis

@@ -11,12 +11,16 @@ export type CandleInterval = "1m" | "5m" | "1h" | "1d";
 export type OrderSide = "BUY" | "SELL";
 export type OrderType = "MARKET" | "LIMIT";
 export type TimeInForce = "DAY" | "GTC";
+/**
+ * 주문 상태 (넥스트증권 공개 스펙 v1.3 부록 D 7종 + UNKNOWN 폴백).
+ * PENDING_CANCEL 은 취소 접수 후 미확정 — 원주문이 체결될 수 있으므로 OPEN 으로 분류한다.
+ */
 export type OrderStatus =
-  | "SUBMITTED" | "PARTIALLY_FILLED" | "FILLED"
+  | "SUBMITTED" | "PARTIALLY_FILLED" | "PENDING_CANCEL" | "FILLED"
   | "CANCELED" | "REJECTED" | "EXPIRED" | "UNKNOWN";
 
 export const isOpenStatus = (s: OrderStatus): boolean =>
-  s === "SUBMITTED" || s === "PARTIALLY_FILLED";
+  s === "SUBMITTED" || s === "PARTIALLY_FILLED" || s === "PENDING_CANCEL";
 
 export interface Quote {
   symbol: string;

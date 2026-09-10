@@ -23,7 +23,7 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 
 | | ID | 증권사 | 시장 | 캔들 | 상태 |
 |:---:|---|---|---|---|:---:|
-| <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 5m · 1h · 1d | ✅ 검증 |
+| <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 1d | ✅ 검증 (공개 스펙 v1.3) |
 | <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ 검증 |
 | <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ 검증 |
 | <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://corp.tossinvest.com/ko/open-api) | — | — | ⏳ API 샌드박스 출시 대기 |
@@ -66,10 +66,10 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (연결 계층이 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.5")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.6")
 
     // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.5")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.6")
 }
 ```
 

@@ -30,7 +30,7 @@
 - [ ] 국내 증권사 REST 오픈API 실태 조사 (LS증권, 미래에셋, KB, 대신 등)
 - [ ] 조사 결과 순서대로 어댑터 추가 (커뮤니티 기여 유도)
 - [ ] 토스증권 — Open API 에 모의투자 샌드박스가 출시되면 추가
-- [ ] 서버 신규 기능 추적: 넥스트증권 advanced 주문/kill-switch 배포 시 네이티브 전환
+- [ ] 넥스트증권 `/v2` 연동: `POST /v2/orders/advanced`(BRACKET) 네이티브 브라켓 전환, `POST /v2/kill-switch` 를 `TradingGuard.halt()` 에 연결 (공개 스펙 v1.3 시점 서버 제공 확인)
 
 ## Phase D — 실시간 계층 (Hermetix Pro)
 

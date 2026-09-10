@@ -59,7 +59,16 @@ getToken()
 ```
 
 - `NextApiClient` 는 모든 인증 호출을 `executeWithRetry` 로 감싼다: 401(또는 `type=authentication`) 응답이면 `invalidate()` 후 **정확히 1회** 재발급-재시도. 재시도도 실패하면 예외 전파
-- 서버 토큰 유효기간은 실측 24시간 (문서상 15분 — 실서버 기준을 따름)
+- 토큰 유효기간은 공개 스펙 v1.3 기준 12시간(`expires_in=43200`), refresh 토큰 없음. 어댑터는 응답의 `expires_in` 을 그대로 신뢰한다
+- 토큰 발급 API 만 에러 형식이 다르다 — 400/401 은 OAuth 표준 `{error, error_description}`, 429/5xx 는 플랫폼 엔벨로프. `TokenManager` 가 둘 다 `AuthError` 로 변환한다
+
+### 넥스트증권 공통 헤더 (공개 스펙 v1.3)
+
+| 헤더 | 대상 | 규칙 |
+|---|---|---|
+| `Authorization: Bearer {token}` | 전 API | 12h 토큰 |
+| `X-Request-Id` | 토큰 발급 외 **전 고객 API 필수** | 영숫자·`.`·`_`·`-` 만, 64자 이하. 누락 시 400 `request-id-required`. 어댑터가 호출마다 `hmx-{uuid}` 를 생성하며, 에러 엔벨로프의 `requestId` 로 되돌아온다 |
+| `X-Next-Account-Id` | 계좌·자산·주문 API 필수 (`GET /v1/account` 포함) | v1.1 의 `X-Nextsecurities-Account` 에서 개명. 토큰의 계좌와 불일치 시 403 `account-mismatch` |
 
 ## 엔진 틱 파이프라인 (StrategyEngine.tick)
 
@@ -92,7 +101,7 @@ tick(strategy):
 
 ## 소프트웨어 브라켓 (BracketMonitor)
 
-서버가 네이티브 STOP/BRACKET 주문을 아직 지원하지 않아 (2026-08 실측: `/v1/orders/advanced` 는 모든 요청을 거부) 코어가 소프트웨어로 대체한다:
+서버의 네이티브 BRACKET 주문(`POST /v2/orders/advanced`, 공개 스펙 v1.3 시점 `/v2` 로 제공)을 아직 연동하지 않아 코어가 소프트웨어로 대체한다:
 
 ```
 등록: Buy 주문 접수 직후 {entryOrderId, symbol, qty, tp?, sl?} 저장 (메모리 Map)
@@ -109,16 +118,16 @@ tick(strategy):
 - 청산이 시장가라 급변동 시 슬리피지 존재
 - 판정 주기가 엔진 틱 주기와 같으므로 틱 사이의 순간 스파이크는 놓칠 수 있다
 
-서버가 advanced 주문을 배포하면: `OrderExecutor.buy()` 에서 tp/sl 존재 시 BRACKET 주문으로 보내는 fast-path 를 추가하고 BracketMonitor 는 폴백으로 강등하는 것이 로드맵이다.
+네이티브 전환 로드맵: `OrderExecutor.buy()` 에서 tp/sl 존재 시 `/v2/orders/advanced` BRACKET 주문으로 보내는 fast-path 를 추가하고(`BrokerCapabilities.nativeBracket=true`), BracketMonitor 는 폴백으로 강등한다.
 
 ## 비상정지 (TradingGuard)
 
-서버 킬 스위치(`/v1/kill-switch`)가 미배포라 클라이언트 측에서 같은 효과를 낸다:
+서버 킬 스위치(`/v2/kill-switch`, v1.3 시점 `/v2` 로 제공)를 아직 연동하지 않아 클라이언트 측에서 같은 효과를 낸다:
 
 - 틱 연속 실패가 `hermetix.engine.max-consecutive-failures`(기본 5) 도달 → `halt()`
 - `halt()`: 미체결 전량 개별 취소 + `halted=true` (이후 모든 주문 차단, 틱 스킵)
 - 해제: `TradingGuard.resume()` 호출 또는 앱 재시작. **자동 해제는 없다** — 사람이 원인을 보게 만드는 것이 의도
-- 서버 킬 스위치가 배포되면 `halt()` 에서 `POST /v1/kill-switch` 를 함께 호출하도록 확장 예정
+- 연동 로드맵: `halt()` 에서 `POST /v2/kill-switch` 를 함께 호출해 서버 측에서도 주문을 차단(423 `trading-halted`)하도록 확장 예정
 
 ## 상태 지도 — 무엇이 어디에 있는가
 
@@ -151,14 +160,15 @@ BrokerApiException (기반)
 
 | | next | kis | kiwoom |
 |---|---|---|---|
-| 인증 | OAuth client_credentials, 토큰 24h | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) |
-| 레이트리밋 | 없음(관측상) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 |
-| 캔들 | 1m/5m/1h/1d | 1d (분봉 API 가 당일 한정이라 미지원) | 1d |
+| 인증 | OAuth client_credentials, 토큰 12h (v1.3) | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) |
+| 레이트리밋 | 그룹별 초당 제한, 429 + `Retry-After` (어댑터 자동 재시도 없음 — 엔진이 다음 틱까지 대기) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 |
+| 캔들 | 1m/1d (v1.3) | 1d (분봉 API 가 당일 한정이라 미지원) | 1d |
 | 캘린더 | 서버 제공 (미국장) | KRX 합성 (공휴일 미반영) | KRX 합성 |
 | clientOrderId | 지원 (24h 멱등) | 미지원 (무시) | 미지원 (무시) |
 | 미체결 조회 | 서버 제공 | **서버 미제공 → 어댑터 메모리 추적** (체결은 보유수량 변화로 근사, 재시작 시 추적 소실) | 서버 제공 (ka10075) |
 | 주문취소 | orderId 만으로 가능 | ODNO 단독 (지점번호 불필요 - 실측) | 미체결 조회로 종목코드 역참조 |
 | 수량/금액 표기 | JSON 문자열 | 문자열 | 부호 접두(가격) / zero-padded(금액) — 어댑터가 정규화 |
+| 응답 정규화 | v1.3 원시 응답(quotes `outcome`, 캔들 `time`, `cashAmount`, `averageBuyPrice`, 캘린더 `status`+`sessions[]`)을 공통 모델로 변환. 등락률·손익률 %→비율, KST 세션 시각→뉴욕 현지 HH:mm, 총평가=예수금+보유 평가금액(보유 조회 1회 추가) | KIS 응답 → 공통 모델 | 키움 응답 → 공통 모델 |
 
 새 어댑터 추가 절차: ① 모의서버 실측(토큰/시세/캔들/잔고/주문/에러 포맷) ② `BrokerClient` 구현 ③ 오토컨피그에 @ConditionalOnProperty 등록 ④ env-gated 실서버 스모크 테스트.
 
