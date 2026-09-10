@@ -2,34 +2,43 @@
 
 # Hermetix
 
-**증권사 모의투자 통합 트레이딩 프레임워크**
+**증권사 오픈 API 통합 트레이딩 프레임워크 — 모의투자로 검증하고, 설정 한 줄로 실전까지**
 
-전략은 한 번만 작성하세요. 증권사는 설정 한 줄로 갈아끼웁니다.
+전략은 한 번만 작성하세요. 증권사도, 모의/실전도 설정 한 줄로 갈아끼웁니다. 키는 언제나 당신의 기기에서만 쓰입니다.
 
 [![JitPack](https://jitpack.io/v/tauthdev/hermetix-trading-core.svg)](https://jitpack.io/#tauthdev/hermetix-trading-core)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F.svg?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 
-[전략 작성 가이드](docs/strategy-guide.md) · [아키텍처](docs/architecture.md) · [로드맵](ROADMAP.md) · [기여하기](CONTRIBUTING.md)
+[전략 작성 가이드](docs/strategy-guide.md) · [아키텍처](docs/architecture.md) · [컨포먼스 킷](conformance/README.md) · [로드맵](ROADMAP.md) · [기여하기](CONTRIBUTING.md)
 
 </div>
 
 ---
 
-Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이스로 통일합니다. 여기에 전략 실행 엔진까지 얹어서, `TradingStrategy` 인터페이스 하나만 구현하면 자동매매 봇이 완성됩니다.
+Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인터페이스로 통일합니다 (ccxt 가 거래소에 하는 일을 증권사에 합니다). 여기에 전략 실행 엔진까지 얹어서, `TradingStrategy` 인터페이스 하나만 구현하면 자동매매 봇이 완성됩니다. 모의투자로 검증한 봇은 설정 한 줄로 실전 계좌에 연결됩니다.
 
 ## 지원 브로커
 
-| | ID | 증권사 | 시장 | 캔들 | 상태 |
-|:---:|---|---|---|---|:---:|
-| <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 1d | ✅ 검증 (공개 스펙 v1.3) |
-| <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ 검증 |
-| <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ 검증 |
-| <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://corp.tossinvest.com/ko/open-api) | — | — | ⏳ API 샌드박스 출시 대기 |
+| | ID | 증권사 | 시장 | 캔들 | 모의 | 실전 | 상태 |
+|:---:|---|---|---|---|:---:|:---:|:---:|
+| <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 1d | ✅ | ✅ 키 프리픽스로 구분 | ✅ 검증 (공개 스펙 v1.3) |
+| <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ | ✅ 호스트·TR 자동 전환 | ✅ 검증 (모의) |
+| <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ | ✅ 호스트 자동 전환 | ✅ 검증 (모의) |
 
-✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 어댑터.
-브로커별 지원 기능은 [`BrokerCapabilities`](hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며, 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
+✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 환경. KIS·키움의 실전은 호스트·TR ID 전환만 구현돼 있고 실계좌 스모크는 아직입니다.
+브로커별 지원 기능은 [`BrokerCapabilities`](kotlin/hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며(캔들 주기·지원 환경·시장·멱등키 등), 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
+
+**다음 어댑터 후보** ([2026-09 국내 증권사 오픈 API 조사](claudedocs/korean-broker-openapi-survey-2026-09.md)):
+
+| 증권사 | 판정 | 비고 |
+|---|---|---|
+| NH투자증권 (NH PLUG) | 1순위 | 2026-08 REST 출시, 모의 서버 분리, WS 제공 |
+| DB증권 | 2순위 | REST+WS, 모의 키 분리 — KIS 와 구조가 가장 비슷 |
+| LS증권 | 3순위 | REST, 모의 지원. TR 코드 기반 |
+| 토스증권 | 조건부 | 2026-08 REST 출시. **모의투자 없음** — 실전 전용 |
+| KB증권 | 조건부 | 2026-07 개인 오픈베타. 모의투자 "추후" |
 새 브로커를 원하시면 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)를 올려주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
 
 ## 왜 Hermetix 인가
@@ -39,7 +48,8 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 - **소프트웨어 브라켓** — `Signal.Buy(takeProfitPrice=…, stopLossPrice=…)` 한 줄로 익절/손절 자동화
 - **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단), 주문 금액 상한
 - **모의 → 실전 전환은 설정 한 줄** — `environment: live` 와 명시 동의(`hermetix.live.enabled`)가 있어야만 실전 주문이 나갑니다. 키는 항상 당신의 기기에서만 쓰입니다
-- **레이트리밋 내장** — 증권사별 요청 제한을 어댑터가 쓰로틀/백오프로 흡수합니다
+- **레이트리밋 내장** — 증권사별 요청 제한을 공용 `RateLimiter` 가 쓰로틀/백오프/`Retry-After` 로 흡수합니다
+- **네 언어, 같은 규약** — Kotlin 레퍼런스와 Python/JS/Go 포팅이 같은 골든 픽스처의 [컨포먼스 시나리오](conformance/README.md)를 통과합니다
 - **KRX 호가단위 자동 보정** — 계산된 지정가를 KRX 가격대별 호가단위(1원~1,000원)에 맞게 어댑터가 보정합니다
 - **수익률 기본 제공** — `GET /pnl` 엔드포인트와 주기 PnL 로그가 모든 봇에 자동 포함됩니다
 - **타입화된 에러** — `MarketClosedError`, `RateLimitError`, `InsufficientFundsError`… 어느 브로커든 같은 방식으로 처리합니다
@@ -48,12 +58,14 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 
 언어별 네이티브 구현이 제공됩니다 — 같은 브로커/전략 규약, 같은 안전장치:
 
-| 언어 | 폴더 | 의존성 |
-|---|---|---|
-| Kotlin/JVM (레퍼런스) | 아래 참조 | Spring Boot |
-| [Python](python/) | `python/` | 0개 (stdlib) |
-| [JavaScript/TypeScript](js/) | `js/` | decimal.js |
-| [Go](go/) | `go/` | shopspring/decimal |
+| 언어 | 폴더 | 버전 | 의존성 | 설치 |
+|---|---|---|---|---|
+| Kotlin/JVM (레퍼런스) | `kotlin/` | 0.6.0 | Spring Boot | JitPack (아래) |
+| [Python](python/) | `python/` | 0.2.0 | 0개 (stdlib, 3.10+) | `pip install ./python` |
+| [JavaScript/TypeScript](js/) | `js/` | 0.2.0 | decimal.js (Node 18+) | `npm install ./js` |
+| [Go](go/) | `go/` | — | shopspring/decimal | `go get github.com/tauthdev/hermetix-trading-core/go` |
+
+Python/JS 는 아직 PyPI/npm 에 올리지 않아 레포 경로로 설치합니다.
 
 **Kotlin/JVM**:
 
@@ -190,9 +202,11 @@ next / kis / kiwoom 어댑터       ← 인증, 레이트리밋, 방언 정규�
 ```
 
 - 엔진은 `pollInterval` 주기로 전략을 호출합니다 — 해당 브로커 시장의 정규장에만 (next=미국장 ET, kis/kiwoom=KRX KST)
-- `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지)
+- 기동 시 검증: 전략의 캔들 주기를 브로커가 지원하는지, 브로커 환경(모의/실전)이 선언된 것인지, 실전이면 명시 동의가 있는지 — 하나라도 어긋나면 스케줄하지 않습니다
+- `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지). 주문 금액 상한(`hermetix.risk.*`)을 넘는 시그널은 제출하지 않습니다
 - 익절/손절(소프트웨어 브라켓)은 앱 메모리에서 관리됩니다 — 재시작 시 사라지므로 [전략 가이드](docs/strategy-guide.md)의 복원 패턴을 참고하세요
 - 연속 실패가 임계치(기본 5회)에 도달하면 비상정지 — 미체결 전량 취소 후 주문 차단 (휴장·레이트리밋은 카운트 제외)
+- 심볼은 `MARKET:CODE` 접두를 허용합니다 (`KRX:005930`, `US:AAPL`). 어댑터는 코드만 보내고, 컨텍스트 조회는 접두 유무를 무시합니다
 
 ## 수익률 확인
 
@@ -223,8 +237,10 @@ hermetix:
 
 ## 문서
 
-- [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스, 패턴, 테스트, 트러블슈팅
-- [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 어댑터 비교표, 상태 지도
+- [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스, 패턴, 안전장치, 테스트, 트러블슈팅
+- [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 거래 환경·RiskGuard·심볼 규약, 어댑터 비교표, 상태 지도
+- [컨포먼스 킷](conformance/README.md) — 새 어댑터 검증 시나리오와 네 언어 공용 골든 픽스처
+- [국내 증권사 오픈 API 조사 (2026-09)](claudedocs/korean-broker-openapi-survey-2026-09.md) — 다음 어댑터 우선순위 근거
 - [로드맵](ROADMAP.md) — 5단계 발전 계획
 - [기여 가이드](CONTRIBUTING.md)
 
@@ -232,4 +248,4 @@ hermetix:
 
 [MIT](LICENSE)
 
-> **면책**: 이 프로젝트의 모든 것은 모의투자 학습용이며 투자 조언이 아닙니다. 각 증권사 로고는 해당 회사의 자산이며, 지원 서비스를 표시하기 위해서만 사용됩니다.
+> **면책**: 이 프로젝트는 학습·연구용 소프트웨어이며 투자 조언이 아닙니다. 실전투자(`environment: live`)로 발생하는 모든 손실의 책임은 사용자에게 있습니다 — 모의투자에서 충분히 검증하고, 주문 금액 상한을 설정한 뒤 소액으로 시작하세요. Hermetix 는 어떤 서버로도 당신의 API 키를 받지 않습니다. 각 증권사 로고는 해당 회사의 자산이며, 지원 서비스를 표시하기 위해서만 사용됩니다.
