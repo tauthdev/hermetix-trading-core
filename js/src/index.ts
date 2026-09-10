@@ -43,6 +43,8 @@ export type { ConformanceReport, ConformanceScenario } from "./testing.js";
 export { NextClient } from "./brokers/next.js";
 export { KisClient } from "./brokers/kis.js";
 export { KiwoomClient } from "./brokers/kiwoom.js";
+export { NhClient } from "./brokers/nh.js";
+export { DbClient } from "./brokers/db.js";
 export type { Buy, Cancel, Sell, Signal, Strategy, StrategySpec } from "./strategy.js";
 export { StrategyContext, buy, cancel, sell } from "./strategy.js";
 export {

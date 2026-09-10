@@ -41,6 +41,8 @@ func main() {
 
 ```go
 hermetix.NewKisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, 일봉만)
+hermetix.NewNhClient(appKey, appSecret, "")     // NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반) — 계좌 비우면 자동 선택
+hermetix.NewDbClient(appKey, appSecret)         // DB증권 (⚠️ 미검증, 문서 기반)
 hermetix.NewKiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 

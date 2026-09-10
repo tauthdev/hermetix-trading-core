@@ -6,6 +6,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.kotlinModule
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.client.NextApiClient
+import com.tripleauth.hermetix.client.db.DbApiClient
+import com.tripleauth.hermetix.client.db.DbApiProperties
+import com.tripleauth.hermetix.client.nh.NhApiClient
+import com.tripleauth.hermetix.client.nh.NhApiProperties
 import com.tripleauth.hermetix.client.kis.KisApiClient
 import com.tripleauth.hermetix.client.kis.KisApiProperties
 import com.tripleauth.hermetix.client.kiwoom.KiwoomApiClient
@@ -30,7 +34,7 @@ import org.springframework.context.annotation.Bean
 
 @AutoConfiguration
 @EnableConfigurationProperties(
-    NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class,
+    NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class, NhApiProperties::class, DbApiProperties::class,
     NextEngineProperties::class, NextPnlProperties::class, HermetixLiveProperties::class, HermetixRiskProperties::class,
 )
 class NextTradingAutoConfiguration {
@@ -64,6 +68,20 @@ class NextTradingAutoConfiguration {
     @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "kiwoom")
     fun kiwoomApiClient(kiwoomProperties: KiwoomApiProperties): KiwoomApiClient =
         KiwoomApiClient(kiwoomProperties, objectMapper)
+
+    /** NH투자증권 NH PLUG — 문서 기반 구현(실측 전), 상태 미검증 */
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "nh")
+    fun nhApiClient(nhProperties: NhApiProperties): NhApiClient =
+        NhApiClient(nhProperties, objectMapper)
+
+    /** DB증권 — 문서 기반 구현(실측 전), 상태 미검증 */
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "db")
+    fun dbApiClient(dbProperties: DbApiProperties): DbApiClient =
+        DbApiClient(dbProperties, objectMapper)
 
     @Bean
     @ConditionalOnMissingBean

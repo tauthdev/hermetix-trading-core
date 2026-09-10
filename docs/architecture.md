@@ -179,17 +179,19 @@ BrokerApiException (기반)
 
 `BrokerClient` 구현체는 `hermetix.broker` 값으로 선택된다 (@ConditionalOnProperty). 실측 기반 어댑터별 특성:
 
-| | next | kis | kiwoom |
-|---|---|---|---|
-| 인증 | OAuth client_credentials, 토큰 12h (v1.3) | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) |
-| 레이트리밋 | 그룹별 초당 제한, 429 + `Retry-After` (어댑터 자동 재시도 없음 — 엔진이 다음 틱까지 대기) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 |
-| 캔들 | 1m/1d (v1.3) | 1d (분봉 API 가 당일 한정이라 미지원) | 1d |
-| 캘린더 | 서버 제공 (미국장) | KRX 합성 (공휴일 미반영) | KRX 합성 |
-| clientOrderId | 지원 (24h 멱등) | 미지원 (무시) | 미지원 (무시) |
-| 미체결 조회 | 서버 제공 | **서버 미제공 → 어댑터 메모리 추적** (체결은 보유수량 변화로 근사, 재시작 시 추적 소실) | 서버 제공 (ka10075) |
-| 주문취소 | orderId 만으로 가능 | ODNO 단독 (지점번호 불필요 - 실측) | 미체결 조회로 종목코드 역참조 |
-| 수량/금액 표기 | JSON 문자열 | 문자열 | 부호 접두(가격) / zero-padded(금액) — 어댑터가 정규화 |
-| 응답 정규화 | v1.3 원시 응답(quotes `outcome`, 캔들 `time`, `cashAmount`, `averageBuyPrice`, 캘린더 `status`+`sessions[]`)을 공통 모델로 변환. 등락률·손익률 %→비율, KST 세션 시각→뉴욕 현지 HH:mm, 총평가=예수금+보유 평가금액(보유 조회 1회 추가) | KIS 응답 → 공통 모델 | 키움 응답 → 공통 모델 |
+| | next | kis | kiwoom | nh ⚠️ | db ⚠️ |
+|---|---|---|---|---|---|
+| 인증 | OAuth client_credentials, 토큰 12h (v1.3) | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) | appkey/secret → 토큰 24h (운영 호스트 전용 발급, 쿼리스트링) | appkey/secret → 토큰 24h (form, 발급 1분 1건) |
+| 레이트리밋 | 그룹별 초당 제한, 429 + `Retry-After` (어댑터 자동 재시도 없음 — 엔진이 다음 틱까지 대기) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 | 초당 5회 → 250ms 쓰로틀 + 429 재시도 | 앱 20 TPS·잔고 2·예수금 1 TPS → 500ms 쓰로틀 + IGW00201 지수 백오프 |
+| 캔들 | 1m/1d (v1.3) | 1d (분봉 API 가 당일 한정이라 미지원) | 1d | 1d (currentDaily) | 1d (kr-chart/day) |
+| 캘린더 | 서버 제공 (미국장) | KRX 합성 (공휴일 미반영) | KRX 합성 | KRX 합성 | KRX 합성 |
+| clientOrderId | 지원 (24h 멱등) | 미지원 (무시) | 미지원 (무시) | 미지원 | 미지원 |
+| 미체결 조회 | 서버 제공 | **서버 미제공 → 어댑터 메모리 추적** (체결은 보유수량 변화로 근사, 재시작 시 추적 소실) | 서버 제공 (ka10075) | dailyOrderExecution (당일, ny_cns_qty>0) | transaction-history (당일, MrcAbleQty>0) |
+| 주문취소 | orderId 만으로 가능 | ODNO 단독 (지점번호 불필요 - 실측) | 미체결 조회로 종목코드 역참조 | org_mkt_orr_no + iem_cd (조회로 역참조) | OrgOrdNo + IsuNo + 잔량 (조회로 역참조) |
+| 수량/금액 표기 | JSON 문자열 | 문자열 | 부호 접두(가격) / zero-padded(금액) — 어댑터가 정규화 | 숫자/문자 혼재 — 양쪽 허용 파서, iem_cd 12자리→6자리 정규화 | 문자열 추정 — 양쪽 허용 파서, IsuNo A접두 제거 |
+| 응답 정규화 | v1.3 원시 응답(quotes `outcome`, 캔들 `time`, `cashAmount`, `averageBuyPrice`, 캘린더 `status`+`sessions[]`)을 공통 모델로 변환. 등락률·손익률 %→비율, KST 세션 시각→뉴욕 현지 HH:mm, 총평가=예수금+보유 평가금액(보유 조회 1회 추가) | KIS 응답 → 공통 모델 | 키움 응답 → 공통 모델 | Input_0/Output_n 봉투, HTTP 200 + rsp_cd 업무오류 | In/Out 봉투, HTTP 200 + rsp_cd 업무오류 |
+
+⚠️ nh·db 는 공식 SDK/문서 기반 구현으로 실측 전이다 — 각 클래스 KDoc 의 "문서로 확정하지 못한 점" 을 실측으로 확인해야 한다.
 
 새 어댑터 추가 절차: ① 모의서버 실측(토큰/시세/캔들/잔고/주문/에러 포맷)으로 `conformance/fixtures/<broker>.json` 작성 ② `BrokerClient` 구현 ③ **컨포먼스 킷 통과** (`BrokerConformance.verify`, 네 언어 공통 시나리오 — [conformance/README.md](../conformance/README.md)) ④ 오토컨피그에 @ConditionalOnProperty 등록 ⑤ env-gated 실서버 스모크 테스트.
 

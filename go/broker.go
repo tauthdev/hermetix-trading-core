@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -268,4 +269,9 @@ func encodeQuery(query map[string]string) string {
 		values.Set(k, v)
 	}
 	return values.Encode()
+}
+
+// sortCandles - 과거→최신 정렬 (브로커는 대개 최신순으로 준다).
+func sortCandles(candles []Candle) {
+	sort.Slice(candles, func(i, j int) bool { return candles[i].Timestamp.Before(candles[j].Timestamp) })
 }

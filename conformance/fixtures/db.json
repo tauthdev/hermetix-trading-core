@@ -1,0 +1,36 @@
+{
+  "broker": "db",
+  "description": "DB증권 REST OpenAPI 응답 형태 — 공식 SDK(DBsecurities/dbsec-open-api) 예제 docstring 과 2024 샘플 출력에서 재구성한 문서 기반 픽스처 (실측 전). 라우트는 method+path 로 매칭 (TR 헤더 없음)",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400 } },
+    { "method": "POST", "path": "/api/v1/quote/kr-stock/inquiry/price",
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상 처리 되었습니다.",
+        "Out": { "Prpr": "70000", "PrdyVrss": "-500", "PrdyCtrt": "-0.71", "Sdpr": "70500", "Oprc": "69500", "Hprc": "70500", "Lprc": "69000", "Mxpr": "91600", "Llam": "49400",
+                 "AcmlVol": "12345678", "AcmlTrPbmn": "864197460000", "PrdyVol": "11000000", "Askp1": "70100", "Bidp1": "70000", "Per": "12.3", "Pbr": "1.4" } } },
+    { "method": "POST", "path": "/api/v1/quote/kr-chart/day",
+      "body": { "rsp_cd": "00000", "rsp_msg": "조회가 완료되었습니다.", "Out": [
+        { "Date": "20260910", "Hour": "", "Oprc": "69500", "Hprc": "70500", "Lprc": "69000", "Prpr": "70000", "CntgVol": "12345678" },
+        { "Date": "20260909", "Hour": "", "Oprc": "69000", "Hprc": "69800", "Lprc": "68500", "Prpr": "69500", "CntgVol": "11000000" },
+        { "Date": "20260908", "Hour": "", "Oprc": "68000", "Hprc": "69200", "Lprc": "67900", "Prpr": "69000", "CntgVol": "10500000" } ] } },
+    { "method": "POST", "path": "/api/v1/trading/kr-stock/inquiry/balance",
+      "body": { "rsp_cd": "00000", "rsp_msg": "모의투자 조회가 완료되었습니다.",
+        "Out": { "TotBuyAmt": "204000", "TotEvalAmt": "210000", "TotEvalPnlAmt": "6000", "TotErnrat": "2.9412", "DpsastAmt": "1210000", "Dps2": "1000000" },
+        "Out1": [
+          { "IsuNo": "A005930", "IsuNm": "삼성전자", "BalQty": "3", "BalQty0": "3", "AbleQty": "3", "ExecPrc": "68000", "PchsAmt": "204000", "NowPrc": "70000",
+            "EvalAmt": "210000", "EvalPnlAmt": "6000", "Ernrat": "2.9412" } ] } },
+    { "method": "POST", "path": "/api/v1/trading/kr-stock/inquiry/acnt-deposit",
+      "body": { "rsp_cd": "00000", "rsp_msg": "모의투자 조회가 완료되었습니다.", "Out1": { "DpsBalAmt": "1000000", "WthdwAbleAmt": "1000000", "MnyrclAmt": "0" } } },
+    { "method": "POST", "path": "/api/v1/trading/kr-stock/order",
+      "body": { "rsp_cd": "00000", "rsp_msg": "모의투자 정상 처리 되었습니다.", "Out": { "OrdNo": "1234", "OrdTime": "091500000", "ShtnIsuNo": "A005930", "IsuNm": "삼성전자", "SpotOrdQty": "1", "MnyOrdAmt": "70000" } } },
+    { "method": "POST", "path": "/api/v1/trading/kr-stock/inquiry/transaction-history",
+      "body": { "rsp_cd": "00000", "rsp_msg": "모의투자 조회가 완료되었습니다.", "Out1": [
+        { "OrdNo": "1234", "OrgOrdNo": "0", "IsuNo": "A005930", "BnsTpCode": "2", "OrdprcPtnCode": "00", "OrdPtnCode": "02", "OrdQty": "1", "OrdPrc": "70000",
+          "AllExecQty": "0", "AvrExecPrc": "0", "MrcAbleQty": "1", "MrcQty": "0", "OrdTrxPtnCode": "0", "TrxTime": "091500000", "OrdCndiTpCode": "0", "TrdMktCode": "1" },
+        { "OrdNo": "1100", "OrgOrdNo": "0", "IsuNo": "A005930", "BnsTpCode": "2", "OrdprcPtnCode": "00", "OrdPtnCode": "02", "OrdQty": "2", "OrdPrc": "69000",
+          "AllExecQty": "2", "AvrExecPrc": "69000", "MrcAbleQty": "0", "MrcQty": "0", "OrdTrxPtnCode": "0", "TrxTime": "090500000", "OrdCndiTpCode": "0", "TrdMktCode": "1" } ] } },
+    { "method": "POST", "path": "/api/v1/trading/kr-stock/order-cancel",
+      "body": { "rsp_cd": "00000", "rsp_msg": "모의투자 정상 처리 되었습니다.", "Out": { "OrdNo": "1236", "PrntOrdNo": "1234", "OrdTime": "091600000", "ShtnIsuNo": "A005930", "IsuNm": "삼성전자" } } }
+  ]
+}

@@ -26,17 +26,18 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 | <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 1d | ✅ | ✅ 키 프리픽스로 구분 | ✅ 검증 (공개 스펙 v1.3) |
 | <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ | ✅ 호스트·TR 자동 전환 | ✅ 검증 (모의) |
 | <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ | ✅ 호스트 자동 전환 | ✅ 검증 (모의) |
+| <img src="https://www.google.com/s2/favicons?domain=nhqv.com&sz=64" width="28"/> | `nh` | [NH투자증권 NH PLUG](https://www.nhplug.com/) | KRX 국내주식 | 1d | ✅ 호스트 분리 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=dbsec.co.kr&sz=64" width="28"/> | `db` | [DB증권](https://openapi.dbsec.co.kr/) | KRX 국내주식 | 1d | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
 
 ✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 환경. KIS·키움의 실전은 호스트·TR ID 전환만 구현돼 있고 실계좌 스모크는 아직입니다.
+⚠️ 미검증 = 공식 SDK·문서에서 엔드포인트와 필드명을 역추적해 만든 어댑터. 네 언어 컨포먼스 시나리오는 통과했지만 픽스처가 실측이 아니라 문서 재구성값이라, 모의계좌 실측으로 확인되기 전까지는 스펙 해석 오류가 있을 수 있습니다. 실측을 도와주실 분은 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)로 알려주세요.
 브로커별 지원 기능은 [`BrokerCapabilities`](kotlin/hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며(캔들 주기·지원 환경·시장·멱등키 등), 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
 
 **다음 어댑터 후보** ([2026-09 국내 증권사 오픈 API 조사](claudedocs/korean-broker-openapi-survey-2026-09.md)):
 
 | 증권사 | 판정 | 비고 |
 |---|---|---|
-| NH투자증권 (NH PLUG) | 1순위 | 2026-08 REST 출시, 모의 서버 분리, WS 제공 |
-| DB증권 | 2순위 | REST+WS, 모의 키 분리 — KIS 와 구조가 가장 비슷 |
-| LS증권 | 3순위 | REST, 모의 지원. TR 코드 기반 |
+| LS증권 | 다음 | REST, 모의 지원. TR 코드 기반 |
 | 토스증권 | 조건부 | 2026-08 REST 출시. **모의투자 없음** — 실전 전용 |
 | KB증권 | 조건부 | 2026-07 개인 오픈베타. 모의투자 "추후" |
 새 브로커를 원하시면 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)를 올려주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
@@ -148,6 +149,19 @@ hermetix:
 #  kiwoom:
 #    appkey: ${KIWOOM_APPKEY:}
 #    secretkey: ${KIWOOM_SECRETKEY:}
+
+# NH투자증권 NH PLUG (⚠️ 미검증) — 계좌번호를 비우면 모의(acct_type=03) 계좌를 자동 선택
+#  broker: nh
+#  nh:
+#    app-key: ${NH_APP_KEY:}
+#    app-secret: ${NH_APP_SECRET:}
+#    account-no: ${NH_ACCOUNT_NO:}
+
+# DB증권 (⚠️ 미검증) — 모의투자용 키를 넣으면 모의, 실전 키면 실전 (호스트 동일)
+#  broker: db
+#  db:
+#    app-key: ${DB_APP_KEY:}
+#    app-secret: ${DB_APP_SECRET:}
 ```
 
 ## 실전투자로 전환

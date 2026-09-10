@@ -9,6 +9,10 @@ import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.client.NextApiClient
 import com.tripleauth.hermetix.client.NextApiProperties
 import com.tripleauth.hermetix.client.TokenManager
+import com.tripleauth.hermetix.client.db.DbApiClient
+import com.tripleauth.hermetix.client.db.DbApiProperties
+import com.tripleauth.hermetix.client.nh.NhApiClient
+import com.tripleauth.hermetix.client.nh.NhApiProperties
 import com.tripleauth.hermetix.client.kis.KisApiClient
 import com.tripleauth.hermetix.client.kis.KisApiProperties
 import com.tripleauth.hermetix.client.kiwoom.KiwoomApiClient
@@ -101,5 +105,16 @@ class BrokerConformanceTest {
     @Test
     fun `kiwoom 어댑터는 컨포먼스 시나리오를 통과한다`() = run("kiwoom") {
         KiwoomApiClient(KiwoomApiProperties(baseUrl = baseUrl(), appkey = "k", secretkey = "s", throttleMillis = 1), objectMapper)
+    }
+
+    @Test
+    fun `nh 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)`() = run("nh") {
+        // accountNo 를 비워 /n2/acctinfo 로 모의(acct_type=03) 계좌를 고르는 경로까지 검증한다
+        NhApiClient(NhApiProperties(baseUrl = baseUrl(), authUrl = baseUrl(), appKey = "k", appSecret = "s", throttleMillis = 1), objectMapper)
+    }
+
+    @Test
+    fun `db 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)`() = run("db") {
+        DbApiClient(DbApiProperties(baseUrl = baseUrl(), appKey = "k", appSecret = "s", throttleMillis = 1), objectMapper)
     }
 }

@@ -1,0 +1,41 @@
+{
+  "broker": "nh",
+  "description": "NH투자증권 NH PLUG 응답 형태 — 공식 SDK(PLUG-OpenAPI/nhplug-sdk)와 포털 OpenAPI 문서(2026-09-08)에서 재구성한 문서 기반 픽스처 (실측 전). 라우트는 method+path 로 매칭. 토큰은 운영 호스트 전용이지만 테스트에서는 같은 서버로 받는다",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400, "scope": "oob" } },
+    { "method": "POST", "path": "/n2/acctinfo",
+      "body": { "rsp_cd": "00000", "rsp_msg": "조회가 완료되었습니다.", "cust_no": "100805701",
+        "Output_0": [ { "acct_no": "20101036881", "acct_type": "01" }, { "acct_no": "50051036881", "acct_type": "03" } ] } },
+    { "method": "POST", "path": "/krstock/quote/v1/currentPrice",
+      "body": { "rsp_cd": "00000", "rsp_msg": "조회가 완료되었습니다.",
+        "Output_0": { "iem_cd": "005930", "iem_nm": "삼성전자", "stck_prpr": 70000, "prdy_vrss_sign": "5", "prdy_vrss": 500, "prdy_ctrt": 0.71,
+                      "askp": 70100, "bidp": 70000, "acml_vol": 12345678, "acml_tr_pbmn": 864197460000, "stck_oprc": 69500, "stck_hgpr": 70500, "stck_lwpr": 69000, "stck_prdy_clpr": 70500 },
+        "Output_1": [], "Output_2": {} } },
+    { "method": "POST", "path": "/krstock/quote/v1/currentDaily",
+      "body": { "rsp_cd": "00000", "rsp_msg": "조회가 완료되었습니다.", "Output_0": [
+        { "bsop_date": "20260910", "stck_oprc": "69500", "stck_hgpr": "70500", "stck_lwpr": "69000", "stck_clpr": "70000", "prdy_vrss_sign": "5", "prdy_vrss": "500", "prdy_ctrt": "0.71", "acml_vol": "12345678" },
+        { "bsop_date": "20260909", "stck_oprc": "69000", "stck_hgpr": "69800", "stck_lwpr": "68500", "stck_clpr": "69500", "prdy_vrss_sign": "2", "prdy_vrss": "500", "prdy_ctrt": "0.72", "acml_vol": "11000000" },
+        { "bsop_date": "20260908", "stck_oprc": "68000", "stck_hgpr": "69200", "stck_lwpr": "67900", "stck_clpr": "69000", "prdy_vrss_sign": "2", "prdy_vrss": "1000", "prdy_ctrt": "1.47", "acml_vol": "10500000" } ] } },
+    { "method": "POST", "path": "/krstock/inquiry/v1/balance",
+      "body": { "rsp_cd": "00166", "rsp_msg": "조회가 완료되었습니다.",
+        "Output_0": { "act_no": "50051036881", "dca": "1000000", "nxt_dd_dca": "1000000", "nxt2_dd_dca": "1000000", "orr_pbl_amt": "1000000", "orr_pbl_amt4": "1000000",
+                      "nas_amt": "1210000", "tot_aet_amt": "1210000", "tot_byn_amt": "204000", "tot_eal_amt": "210000", "tot_eal_pls": "6000", "pft_rt": 2.94 },
+        "Output_1": [
+          { "iem_cd": "000000005930", "iem_nm": "삼성전자", "pdt_tp_nm": "주식", "itg_bnc_qty": 3, "ny_stl_qty": 0, "rsdl_qty": 3, "phs_pr": 68000, "now_pr": 70000,
+            "byn_amt": 204000, "eal_amt": 210000, "eal_pls_amt": 6000, "pft_rt": 2.94 } ] } },
+    { "method": "POST", "path": "/krstock/order/v1/cashBuy",
+      "body": { "rsp_cd": "00000", "rsp_msg": "주문이 완료되었습니다.", "Output_0": { "mkt_orr_no": 1234, "orr_gno_tab_cd": "01", "orr_qty1": 1, "anw_cld_mkt_orr_no1": 1234 } } },
+    { "method": "POST", "path": "/krstock/order/v1/cashSell",
+      "body": { "rsp_cd": "00000", "rsp_msg": "주문이 완료되었습니다.", "Output_0": { "mkt_orr_no": 1235, "orr_gno_tab_cd": "01", "orr_qty1": 1, "anw_cld_mkt_orr_no1": 1235 } } },
+    { "method": "POST", "path": "/krstock/inquiry/v1/dailyOrderExecution",
+      "body": { "rsp_cd": "00000", "rsp_msg": "조회가 완료되었습니다.", "Output_0": { "cus_fnm": "홍길동" }, "Output_1": [
+        { "itg_orr_no": 1234, "org_itg_orr_no": 0, "iem_cd": "005930", "iem_nm": "삼성전자", "sby_dit_cd_nm": "매수", "cor_can_dit_cd_nm": "", "nmn_pr_tp_cd_nm": "보통가", "orr_cnd_dit_cd_nm": "",
+          "orr_qty": 1, "orr_pr": 70000, "tot_cns_qty": 0, "cns_avg_uit_pr": 0, "cns_amt": 0, "cns_cnt": 0, "ny_cns_qty": 1, "cor_qty": 0, "can_qty": 0, "orr_tm": "091500000", "orr_rjt_rsn_cd_nm": "", "rmt_mkt_cd": "KRX" },
+        { "itg_orr_no": 1100, "org_itg_orr_no": 0, "iem_cd": "005930", "iem_nm": "삼성전자", "sby_dit_cd_nm": "매수", "cor_can_dit_cd_nm": "", "nmn_pr_tp_cd_nm": "보통가", "orr_cnd_dit_cd_nm": "",
+          "orr_qty": 2, "orr_pr": 69000, "tot_cns_qty": 2, "cns_avg_uit_pr": 69000, "cns_amt": 138000, "cns_cnt": 1, "ny_cns_qty": 0, "cor_qty": 0, "can_qty": 0, "orr_tm": "090500000", "orr_rjt_rsn_cd_nm": "", "rmt_mkt_cd": "KRX" } ] } },
+    { "method": "POST", "path": "/krstock/order/v1/cancel",
+      "body": { "rsp_cd": "00000", "rsp_msg": "취소 주문이 완료되었습니다.", "Output_0": { "mkt_orr_no": 1236, "orr_gno_tab_cd": "01", "can_orr_qty1": 1, "can_cld_mkt_orr_no1": 1234 } } }
+  ]
+}

@@ -103,6 +103,19 @@ func TestKiwoomConformance(t *testing.T) {
 	})
 }
 
+// accountNo 를 비워 /n2/acctinfo 로 모의(acct_type=03) 계좌를 고르는 경로까지 검증. 토큰은 운영 호스트 전용 — 테스트에선 같은 서버
+func TestNhConformance(t *testing.T) {
+	runConformance(t, "nh", func(baseURL string) BrokerClient {
+		return NewNhClient("k", "s", "").SetBaseURL(baseURL).SetAuthURL(baseURL).SetThrottle(time.Millisecond)
+	})
+}
+
+func TestDbConformance(t *testing.T) {
+	runConformance(t, "db", func(baseURL string) BrokerClient {
+		return NewDbClient("k", "s").SetBaseURL(baseURL).SetThrottle(time.Millisecond)
+	})
+}
+
 func TestRateLimiterRetryAndThrottle(t *testing.T) {
 	var sleeps []time.Duration
 	now := time.Unix(0, 0)

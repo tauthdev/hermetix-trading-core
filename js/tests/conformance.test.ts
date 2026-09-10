@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
-  Decimal, KisClient, KiwoomClient, NextClient, RateLimitError, RateLimiter, verifyBrokerConformance,
+  DbClient, Decimal, KisClient, KiwoomClient, NextClient, NhClient, RateLimitError, RateLimiter, verifyBrokerConformance,
 } from "../src/index.js";
 import type { BrokerClient } from "../src/index.js";
 
@@ -54,6 +54,9 @@ async function run(broker: string, client: () => BrokerClient) {
 test("next 어댑터는 컨포먼스 시나리오를 통과한다", () => run("next", () => new NextClient("pk_test_conf", "sk_test_conf", "acc_main", "http://next.test")));
 test("kis 어댑터는 컨포먼스 시나리오를 통과한다", () => run("kis", () => new KisClient("k", "s", "50199202", "01", "http://kis.test", 1)));
 test("kiwoom 어댑터는 컨포먼스 시나리오를 통과한다", () => run("kiwoom", () => new KiwoomClient("k", "s", "http://kiwoom.test", 1)));
+// accountNo 를 비워 /n2/acctinfo 로 모의(acct_type=03) 계좌를 고르는 경로까지 검증. 토큰은 운영 호스트 전용 — 테스트에선 같은 가짜 서버
+test("nh 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)", () => run("nh", () => new NhClient("k", "s", "", "http://nh.test", "http://nh.test", "KRX", "KRX", 1)));
+test("db 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)", () => run("db", () => new DbClient("k", "s", "http://db.test", "", "J", 1)));
 
 test("RateLimiter: 쓰로틀·백오프·Retry-After·재시도 소진", async () => {
   const sleeps: number[] = [];

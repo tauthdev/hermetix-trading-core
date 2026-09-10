@@ -31,6 +31,8 @@ await new StrategyEngine(broker, [strategy]).run();
 
 ```ts
 new KisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, 일봉만)
+new NhClient(appKey, appSecret)          // NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반)
+new DbClient(appKey, appSecret)          // DB증권 (⚠️ 미검증, 문서 기반)
 new KiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 

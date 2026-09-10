@@ -32,8 +32,9 @@
 
 ## Phase C — 브로커 커버리지 확장
 
-- [ ] 국내 증권사 REST 오픈API 실태 조사 (LS증권, 미래에셋, KB, 대신 등)
-- [ ] 조사 결과 순서대로 어댑터 추가 (커뮤니티 기여 유도)
+- [x] 국내 증권사 REST 오픈API 실태 조사 — [claudedocs/korean-broker-openapi-survey-2026-09.md](claudedocs/korean-broker-openapi-survey-2026-09.md)
+- [x] 조사 결과 1·2순위 어댑터 추가 — `nh`(NH PLUG), `db`(DB증권): 공식 SDK 기반 문서 구현, 네 언어 컨포먼스 통과. **모의계좌 실측으로 검증 → README 상태 승격** 이 남았다
+- [ ] LS증권 어댑터 (TR 카탈로그 기반) · 토스(실전 전용, 실계좌 필요) · KB(로그인 문서 필요)
 - [ ] 토스증권 — Open API 에 모의투자 샌드박스가 출시되면 추가
 - [ ] 넥스트증권 `/v2` 연동: `POST /v2/orders/advanced`(BRACKET) 네이티브 브라켓 전환, `POST /v2/kill-switch` 를 `TradingGuard.halt()` 에 연결 (공개 스펙 v1.3 시점 서버 제공 확인)
 

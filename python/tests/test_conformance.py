@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from hermetix import (
-    ConformanceScenario, KisClient, KiwoomClient, NextClient, RateLimitError, RateLimiter, verify_broker_conformance,
+    ConformanceScenario, DbClient, KisClient, KiwoomClient, NextClient, NhClient, RateLimitError, RateLimiter,
+    verify_broker_conformance,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "conformance" / "fixtures"
@@ -42,15 +43,20 @@ def load(broker: str):
     return FakeHttp(fx["routes"]), scenario
 
 
-@pytest.mark.parametrize("broker", ["next", "kis", "kiwoom"])
+@pytest.mark.parametrize("broker", ["next", "kis", "kiwoom", "nh", "db"])
 def test_adapter_passes_conformance(broker):
     http, scenario = load(broker)
     if broker == "next":
         client = NextClient("pk_test_conf", "sk_test_conf")
     elif broker == "kis":
         client = KisClient("k", "s", "50199202", throttle_seconds=0.001)
-    else:
+    elif broker == "kiwoom":
         client = KiwoomClient("k", "s", throttle_seconds=0.001)
+    elif broker == "nh":
+        client = NhClient("k", "s", throttle_seconds=0.001)  # account_no 비움 → /n2/acctinfo 로 모의(03) 계좌 선택
+        client._auth_http = http  # 토큰은 운영 호스트 전용이라 별도 클라이언트 — 테스트에선 같은 가짜로
+    else:
+        client = DbClient("k", "s", throttle_seconds=0.001)
     client._http = http
     report = verify_broker_conformance(client, scenario)
     assert report.passed, str(report)

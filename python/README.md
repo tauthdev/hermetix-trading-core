@@ -40,6 +40,8 @@ StrategyEngine(broker, [Ma20Strategy()]).run()   # 정규장 중에만 틱, Ctrl
 
 ```python
 broker = KisClient(appkey=..., appsecret=..., cano=...)   # 한국투자 모의 (KRX)
+broker = NhClient(app_key=..., app_secret=...)            # NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반)
+broker = DbClient(app_key=..., app_secret=...)            # DB증권 (⚠️ 미검증, 문서 기반)
 broker = KiwoomClient(appkey=..., secretkey=...)          # 키움 모의 (KRX)
 ```
 
