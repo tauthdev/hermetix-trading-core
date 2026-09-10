@@ -10,6 +10,7 @@ hermetix-trading-core 는 증권사 모의투자 API(넥스트증권·한국투�
 | 만든 전략을 공유하고 싶다 | 전략 레포를 Public 으로 만들고 [Strategy Share 이슈](../../issues/new?template=strategy-share.md)로 알려주세요. README 의 커뮤니티 전략 목록에 추가합니다 |
 | 코어 버그를 찾았다 | [Bug Report 이슈](../../issues/new?template=bug_report.md) |
 | 코어에 기능을 제안하고 싶다 | [Feature Request 이슈](../../issues/new?template=feature_request.md) 로 먼저 논의 후 PR |
+| 지원했으면 하는 증권사가 있다 | [새 브로커 요청 이슈](../../issues/new?template=broker-request.md) — 계좌가 있어 실측을 도울 수 있으면 적어주세요 |
 | 새 증권사 어댑터를 붙이고 싶다 | [컨포먼스 킷](conformance/README.md) 절차대로 — 실측 픽스처 작성 → `BrokerClient` 구현 → 네 언어 컨포먼스 테스트 통과가 기여 조건입니다 |
 
 ## 개발 환경

@@ -26,7 +26,7 @@
 - [x] 어댑터 컨포먼스 테스트 킷 — `conformance/` 골든 픽스처 + 네 언어 공통 시나리오 (`BrokerConformance` 는 test-fixtures 아티팩트로 배포). 새 어댑터는 통과가 기여 조건
 - [x] 레이트리밋 공용 부품 `RateLimiter` — 쓰로틀 + 백오프 + `Retry-After`
 - [x] 브로커 지원 매트릭스 (README 최상단)
-- [ ] "새 브로커 요청" 이슈 템플릿
+- [x] "새 브로커 요청" 이슈 템플릿 (`.github/ISSUE_TEMPLATE/broker-request.md`)
 - [ ] GitHub Actions CI (빌드 + 단위 테스트, 시크릿 보유 시 실서버 스모크)
 - [x] 어댑터 추가 가이드 문서화 — `conformance/README.md` (실측 → 픽스처 → 구현 → 컨포먼스 → 등록)
 
