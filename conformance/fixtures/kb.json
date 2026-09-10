@@ -1,0 +1,45 @@
+{
+  "broker": "kb",
+  "description": "KB증권 Open API(개인 오픈베타) 응답 형태 — 포털 공개 명세(TR 별 입출력 필드·샘플)와 공식 GitHub 예제에서 재구성한 문서 기반 픽스처 (실계좌 검증 전). 라우트는 method+path 로 매칭. 실전 전용(모의 미제공)",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "정상 처리되었습니다.", "processTime": "20260910093000000" },
+                "dataBody": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400 } } },
+    { "method": "POST", "path": "/api/v1/ivu10140",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "is_nm": "삼성전자", "now_prc": "00000070000", "bdy_cmpr_ccd": "5", "bdy_cmpr": "00000000500", "up_dwn_r_p2": "   -0.71", "acml_vlm": "12345678",
+                              "s_sq1_askprc": "00000070100", "b_sq1_askprc": "00000070000", "opn_prc": "69500", "hgh_prc": "70500", "lw_prc": "69000", "krx_bdy_clpr": "70500" } } },
+    { "method": "POST", "path": "/api/v1/ivs11560",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "msg": "정상적으로 조회가 완료되었습니다.", "chrt_clsf": "D", "is_cd": "005930", "inq_cnt": "3", "out2": [
+                  { "dt": "20260910", "tm": "", "opn_prc_p2": "      69500", "hgh_prc_p2": "      70500", "lw_prc_p2": "      69000", "cls_prc_p2": "      70000", "vlm": "12345678", "bdy_cmpr": "-500", "up_dwn_r_p2": "  -0.71", "bdy_cmpr_ccd": "5" },
+                  { "dt": "20260909", "tm": "", "opn_prc_p2": "      69000", "hgh_prc_p2": "      69800", "lw_prc_p2": "      68500", "cls_prc_p2": "      69500", "vlm": "11000000", "bdy_cmpr": "500", "up_dwn_r_p2": "   0.72", "bdy_cmpr_ccd": "2" },
+                  { "dt": "20260908", "tm": "", "opn_prc_p2": "      68000", "hgh_prc_p2": "      69200", "lw_prc_p2": "      67900", "cls_prc_p2": "      69000", "vlm": "10500000", "bdy_cmpr": "1000", "up_dwn_r_p2": "   1.47", "bdy_cmpr_ccd": "2" } ] } } },
+    { "method": "POST", "path": "/api/v1/ssqm2952",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0011", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "o_msg": "정상적으로 조회되었습니다.", "dy_tfnd": "000000000001000000", "ndy_tfnd": "000000000001000000", "nt_asts_val_amt": "000000000001210000",
+                              "val_amt_sum": "000000000000210000", "val_pl_sum": "000000000000006000", "val_yld_sum": "000000000002.94", "grid_cnt1": "0001", "Record1": [
+                  { "is_cd": "A005930", "is_nm": "삼성전자", "hld_q": "000000000000003", "ordr_psbl_q": "000000000000003", "ec_q": "000000000000003", "byng_avr_prc": "0000000068000.00",
+                    "now_prc": "0000000070000.00", "val_amt": "000000000000210000", "val_pl": "000000000000006000", "val_yld": "000000002.94", "byng_amt": "000000000000204000", "clsf": "현금" } ] } } },
+    { "method": "POST", "path": "/api/v1/ssqm1802",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "o_msg": "정상적으로 조회되었습니다.", "ordr_psbl_csh": "000000000001000000", "ordr_psbl_tl_amt": "000000000001000000", "pcnt100_ordr_psbl_amt": "000000000000999950", "tfnd": "000000000001000000" } } },
+    { "method": "POST", "path": "/api/v1/ssam1802",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "ordr_no": "0040001234", "o_msg": "정상적으로 매수주문 완료되었습니다.", "o_clsf": "SC", "is_cd": "005930", "ordr_q": "0000000001", "ordr_uprc": "000070000", "ordr_ccd": "00", "ordr_jb_clsf": "2" } } },
+    { "method": "POST", "path": "/api/v1/ssam1801",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "ordr_no": "0040001235", "o_msg": "정상적으로 매도주문 완료되었습니다.", "o_clsf": "SC", "is_cd": "005930", "ordr_q": "0000000001", "ordr_uprc": "000070000", "ordr_ccd": "00", "ordr_jb_clsf": "1" } } },
+    { "method": "POST", "path": "/api/v1/ssqm2341",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "o_msg": "정상적으로 조회되었습니다.", "grid_cnt1": "0002", "nxt_key": "", "cn_clsf": " ", "Record1": [
+                  { "ordr_no": "0040001234", "orgn_ordr_no": "0000000000", "stnd_is_no": "KR7005930003", "hngl_shrt_nm": "삼성전자", "trd_dl_ccd_nm": "현금매수", "ordr_typ_cd": "지정가", "ordr_q": "000000000000000001",
+                    "tl_ccls_q": "000000000000000000", "nccls_q": "000000000000000001", "ordr_uprc": "000000000000070000", "ccls_uprc": "000000000000000000", "ordr_tm": "091500", "ordr_ccd": "00", "crct_cncl_ccd": "", "rfsl_rsn_nm": "" },
+                  { "ordr_no": "0040001100", "orgn_ordr_no": "0000000000", "stnd_is_no": "KR7005930003", "hngl_shrt_nm": "삼성전자", "trd_dl_ccd_nm": "현금매수", "ordr_typ_cd": "지정가", "ordr_q": "000000000000000002",
+                    "tl_ccls_q": "000000000000000002", "nccls_q": "000000000000000000", "ordr_uprc": "000000000000069000", "ccls_uprc": "000000000000069000", "ordr_tm": "090500", "ordr_ccd": "00", "crct_cncl_ccd": "", "rfsl_rsn_nm": "" } ] } } },
+    { "method": "POST", "path": "/api/v1/ssam1806",
+      "body": { "dataHeader": { "resultCode": "200", "resultMessage": "성공", "processFlag": "A", "processCode": "0000", "processMessage": "", "processTime": "20260910093000000" },
+                "dataBody": { "ordr_no": "0040001236", "orgn_ordr_no": "0040001234", "o_msg": "정상적으로 취소주문 완료되었습니다.", "o_clsf": "SC", "is_cd": "005930", "ordr_q": "0000000001", "ordr_jb_clsf": "4", "crct_clsf": "2" } } }
+  ]
+}

@@ -33,6 +33,9 @@ await new StrategyEngine(broker, [strategy]).run();
 new KisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, 일봉만)
 new NhClient(appKey, appSecret)          // NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반)
 new DbClient(appKey, appSecret)          // DB증권 (⚠️ 미검증, 문서 기반)
+new LsClient(appKey, appSecret)          // LS증권 (⚠️ 미검증, 문서 기반)
+new TossClient(clientId, clientSecret)   // 토스증권 (⚠️ 실전 전용, 미검증) — liveTradingEnabled 필수, accountSeq 비우면 첫 위탁계좌
+new KbClient(appKey, appSecret)          // KB증권 오픈베타 (⚠️ 실전 전용, 미검증) — liveTradingEnabled 필수
 new KiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 

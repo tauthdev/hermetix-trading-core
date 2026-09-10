@@ -1,6 +1,6 @@
 package hermetix
 
-// 네 언어가 공유하는 골든 픽스처(conformance/fixtures)를 httptest 서버로 재생해 세 어댑터를 컨포먼스 시나리오에 통과시킨다.
+// 네 언어가 공유하는 골든 픽스처(conformance/fixtures)를 httptest 서버로 재생해 모든 어댑터를 컨포먼스 시나리오에 통과시킨다.
 
 import (
 	"encoding/json"
@@ -163,4 +163,23 @@ func TestRateLimiterRetryAndThrottle(t *testing.T) {
 	if _, ok := err.(*RateLimitError); !ok {
 		t.Fatalf("소진 후 RateLimitError 전파: %v", err)
 	}
+}
+
+func TestLsConformance(t *testing.T) {
+	runConformance(t, "ls", func(baseURL string) BrokerClient {
+		return NewLsClient("k", "s").SetBaseURL(baseURL).SetThrottle(time.Millisecond).SetChartThrottle(time.Millisecond)
+	})
+}
+
+// accountSeq 를 비워 /api/v1/accounts 로 BROKERAGE 계좌를 고르는 경로까지 검증
+func TestTossConformance(t *testing.T) {
+	runConformance(t, "toss", func(baseURL string) BrokerClient {
+		return NewTossClient("c_conf", "s_conf", "").SetBaseURL(baseURL).SetThrottle(time.Millisecond)
+	})
+}
+
+func TestKbConformance(t *testing.T) {
+	runConformance(t, "kb", func(baseURL string) BrokerClient {
+		return NewKbClient("k", "s").SetBaseURL(baseURL).SetThrottle(time.Millisecond)
+	})
 }

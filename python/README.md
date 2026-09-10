@@ -42,10 +42,13 @@ StrategyEngine(broker, [Ma20Strategy()]).run()   # 정규장 중에만 틱, Ctrl
 broker = KisClient(appkey=..., appsecret=..., cano=...)   # 한국투자 모의 (KRX)
 broker = NhClient(app_key=..., app_secret=...)            # NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반)
 broker = DbClient(app_key=..., app_secret=...)            # DB증권 (⚠️ 미검증, 문서 기반)
+broker = LsClient(app_key=..., app_secret=...)            # LS증권 (⚠️ 미검증, 문서 기반)
+broker = TossClient(client_id=..., client_secret=...)     # 토스증권 (⚠️ 실전 전용, 미검증) — live_trading_enabled 필수
+broker = KbClient(app_key=..., app_secret=...)            # KB증권 오픈베타 (⚠️ 실전 전용, 미검증) — live_trading_enabled 필수
 broker = KiwoomClient(appkey=..., secretkey=...)          # 키움 모의 (KRX)
 ```
 
-KRX 브로커는 일봉(DAY_1)만 지원합니다 — 엔진이 기동 시 비호환 전략을 걸러내고 이유를 알려줍니다.
+KRX 브로커는 일봉(DAY_1)만 지원합니다(토스는 1m/1d) — 엔진이 기동 시 비호환 전략을 걸러내고 이유를 알려줍니다.
 
 ## 실전투자로 전환
 

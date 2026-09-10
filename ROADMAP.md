@@ -34,8 +34,8 @@
 
 - [x] 국내 증권사 REST 오픈API 실태 조사 — [claudedocs/korean-broker-openapi-survey-2026-09.md](claudedocs/korean-broker-openapi-survey-2026-09.md)
 - [x] 조사 결과 1·2순위 어댑터 추가 — `nh`(NH PLUG), `db`(DB증권): 공식 SDK 기반 문서 구현, 네 언어 컨포먼스 통과. **모의계좌 실측으로 검증 → README 상태 승격** 이 남았다
-- [ ] LS증권 어댑터 (TR 카탈로그 기반) · 토스(실전 전용, 실계좌 필요) · KB(로그인 문서 필요)
-- [ ] 토스증권 — Open API 에 모의투자 샌드박스가 출시되면 추가
+- [x] 3순위 어댑터 추가 — `ls`(LS증권, TR 카탈로그 기반) · `toss`(토스증권, 실전 전용) · `kb`(KB증권 오픈베타, 실전 전용): 문서 기반 구현, 네 언어 컨포먼스 통과. **실측 검증 → README 상태 승격** 이 남았다 (ls 는 모의계좌, toss·kb 는 실계좌 소액)
+- [ ] 토스·KB 에 모의투자 샌드박스가 출시되면 `environments` 에 PAPER 추가
 - [ ] 넥스트증권 `/v2` 연동: `POST /v2/orders/advanced`(BRACKET) 네이티브 브라켓 전환, `POST /v2/kill-switch` 를 `TradingGuard.halt()` 에 연결 (공개 스펙 v1.3 시점 서버 제공 확인)
 
 ## Phase D — 실시간 계층 (Hermetix Pro)

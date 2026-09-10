@@ -1,0 +1,44 @@
+{
+  "broker": "ls",
+  "description": "LS증권 OPEN API 응답 형태 — 포털 TR 문서와 커뮤니티 카탈로그(krsec, k-ebest-im, LsApiHelper, 공식 샘플)에서 재구성한 문서 기반 픽스처 (실측 전). 라우트는 path(토큰) 또는 tr_cd 헤더로 매칭",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400, "scope": "oob" } },
+    { "header": ["tr_cd", "t1102"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 조회가 완료되었습니다.",
+        "t1102OutBlock": { "hname": "삼성전자", "price": 70000, "sign": "5", "change": 500, "diff": 0.71, "volume": 12345678, "recprice": 70500,
+                           "open": 69500, "high": 70500, "low": 69000, "uplmtprice": 91600, "dnlmtprice": 49400, "shcode": "005930" } } },
+    { "header": ["tr_cd", "t8410"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 조회가 완료되었습니다.",
+        "t8410OutBlock": { "shcode": "005930", "cts_date": "", "rec_count": 3 },
+        "t8410OutBlock1": [
+          { "date": "20260908", "open": 68000, "high": 69200, "low": 67900, "close": 69000, "jdiff_vol": 10500000, "value": 720000000, "sign": "2" },
+          { "date": "20260909", "open": 69000, "high": 69800, "low": 68500, "close": 69500, "jdiff_vol": 11000000, "value": 760000000, "sign": "2" },
+          { "date": "20260910", "open": 69500, "high": 70500, "low": 69000, "close": 70000, "jdiff_vol": 12345678, "value": 864000000, "sign": "5" } ] } },
+    { "header": ["tr_cd", "t0424"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 조회가 완료되었습니다.",
+        "t0424OutBlock": { "sunamt": 1210000, "dtsunik": 0, "mamt": 204000, "sunamt1": 1000000, "cts_expcode": "", "tappamt": 210000, "tdtsunik": 6000 },
+        "t0424OutBlock1": [
+          { "expcode": "A005930", "jangb": "", "janqty": 3, "mdposqt": 3, "pamt": 68000, "mamt": 204000, "sinamt": 0, "lastdt": "", "hname": "삼성전자",
+            "price": 70000, "appamt": 210000, "dtsunik": 6000, "sunikrt": 2.94 } ] } },
+    { "header": ["tr_cd", "CSPAQ12200"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 조회가 완료되었습니다.",
+        "CSPAQ12200OutBlock1": { "RecCnt": 1, "AcntNo": "", "BalCreTp": "0" },
+        "CSPAQ12200OutBlock2": { "Dps": 1000000, "D1Dps": 1000000, "D2Dps": 1000000, "MnyOrdAbleAmt": 1000000, "MnyoutAbleAmt": 1000000, "BalEvalAmt": 210000, "DpsastTotamt": 1210000 } } },
+    { "header": ["tr_cd", "CSPAT00601"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 처리 되었습니다.",
+        "CSPAT00601OutBlock1": { "RecCnt": 1, "IsuNo": "A005930", "OrdQty": 1, "OrdPrc": 70000, "BnsTpCode": "2", "OrdprcPtnCode": "00" },
+        "CSPAT00601OutBlock2": { "RecCnt": 1, "OrdNo": 1234, "OrdTime": "091500000", "OrdMktCode": "10", "OrdPtnCode": "00", "ShtnIsuNo": "A005930", "OrdAmt": 70000, "IsuNm": "삼성전자" } } },
+    { "header": ["tr_cd", "CSPAT00801"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 처리 되었습니다.",
+        "CSPAT00801OutBlock1": { "RecCnt": 1, "OrgOrdNo": 1234, "IsuNo": "A005930", "OrdQty": 1 },
+        "CSPAT00801OutBlock2": { "RecCnt": 1, "OrdNo": 1236, "PrntOrdNo": 1234, "OrdTime": "091600000", "ShtnIsuNo": "A005930", "BnsTpCode": "2", "IsuNm": "삼성전자" } } },
+    { "header": ["tr_cd", "t0425"],
+      "body": { "rsp_cd": "00000", "rsp_msg": "정상적으로 조회가 완료되었습니다.",
+        "t0425OutBlock": { "tqty": 3, "tcheqty": 2, "tordrem": 1, "cts_ordno": "" },
+        "t0425OutBlock1": [
+          { "ordno": 1234, "expcode": "A005930", "medosu": "매수", "qty": 1, "price": 70000, "cheqty": 0, "cheprice": 0, "ordrem": 1, "cfmqty": 0, "status": "접수", "orgordno": 0, "ordgb": "현금매수", "ordtime": "09150000", "hogagb": "00", "price1": 70000 },
+          { "ordno": 1100, "expcode": "A005930", "medosu": "매수", "qty": 2, "price": 69000, "cheqty": 2, "cheprice": 69000, "ordrem": 0, "cfmqty": 2, "status": "체결", "orgordno": 0, "ordgb": "현금매수", "ordtime": "09050000", "hogagb": "00", "price1": 70000 } ] } }
+  ]
+}

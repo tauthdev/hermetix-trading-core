@@ -43,6 +43,9 @@ func main() {
 hermetix.NewKisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX, 일봉만)
 hermetix.NewNhClient(appKey, appSecret, "")     // NH투자증권 NH PLUG (⚠️ 미검증, 문서 기반) — 계좌 비우면 자동 선택
 hermetix.NewDbClient(appKey, appSecret)         // DB증권 (⚠️ 미검증, 문서 기반)
+hermetix.NewLsClient(appKey, appSecret)         // LS증권 (⚠️ 미검증, 문서 기반)
+hermetix.NewTossClient(clientID, secret, "")    // 토스증권 (⚠️ 실전 전용, 미검증) — LiveTradingEnabled 필수, 계좌 비우면 첫 위탁계좌
+hermetix.NewKbClient(appKey, appSecret)         // KB증권 오픈베타 (⚠️ 실전 전용, 미검증) — LiveTradingEnabled 필수
 hermetix.NewKiwoomClient(appkey, secretkey)      // 키움 모의 (KRX, 일봉만)
 ```
 

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from hermetix import (
-    ConformanceScenario, DbClient, KisClient, KiwoomClient, NextClient, NhClient, RateLimitError, RateLimiter,
-    verify_broker_conformance,
+    ConformanceScenario, DbClient, KbClient, KisClient, KiwoomClient, LsClient, NextClient, NhClient, RateLimitError,
+    RateLimiter, TossClient, verify_broker_conformance,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "conformance" / "fixtures"
@@ -43,7 +43,7 @@ def load(broker: str):
     return FakeHttp(fx["routes"]), scenario
 
 
-@pytest.mark.parametrize("broker", ["next", "kis", "kiwoom", "nh", "db"])
+@pytest.mark.parametrize("broker", ["next", "kis", "kiwoom", "nh", "db", "ls", "toss", "kb"])
 def test_adapter_passes_conformance(broker):
     http, scenario = load(broker)
     if broker == "next":
@@ -55,8 +55,14 @@ def test_adapter_passes_conformance(broker):
     elif broker == "nh":
         client = NhClient("k", "s", throttle_seconds=0.001)  # account_no 비움 → /n2/acctinfo 로 모의(03) 계좌 선택
         client._auth_http = http  # 토큰은 운영 호스트 전용이라 별도 클라이언트 — 테스트에선 같은 가짜로
-    else:
+    elif broker == "db":
         client = DbClient("k", "s", throttle_seconds=0.001)
+    elif broker == "ls":
+        client = LsClient("k", "s", throttle_seconds=0.001, chart_throttle_seconds=0.001)
+    elif broker == "toss":
+        client = TossClient("c_conf", "s_conf", throttle_seconds=0.001)  # account_seq 비움 → /api/v1/accounts 로 BROKERAGE 선택
+    else:
+        client = KbClient("k", "s", throttle_seconds=0.001)
     client._http = http
     report = verify_broker_conformance(client, scenario)
     assert report.passed, str(report)

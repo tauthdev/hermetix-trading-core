@@ -8,6 +8,12 @@ import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.client.NextApiClient
 import com.tripleauth.hermetix.client.db.DbApiClient
 import com.tripleauth.hermetix.client.db.DbApiProperties
+import com.tripleauth.hermetix.client.kb.KbApiClient
+import com.tripleauth.hermetix.client.kb.KbApiProperties
+import com.tripleauth.hermetix.client.ls.LsApiClient
+import com.tripleauth.hermetix.client.ls.LsApiProperties
+import com.tripleauth.hermetix.client.toss.TossApiClient
+import com.tripleauth.hermetix.client.toss.TossApiProperties
 import com.tripleauth.hermetix.client.nh.NhApiClient
 import com.tripleauth.hermetix.client.nh.NhApiProperties
 import com.tripleauth.hermetix.client.kis.KisApiClient
@@ -35,6 +41,7 @@ import org.springframework.context.annotation.Bean
 @AutoConfiguration
 @EnableConfigurationProperties(
     NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class, NhApiProperties::class, DbApiProperties::class,
+    LsApiProperties::class, TossApiProperties::class, KbApiProperties::class,
     NextEngineProperties::class, NextPnlProperties::class, HermetixLiveProperties::class, HermetixRiskProperties::class,
 )
 class NextTradingAutoConfiguration {
@@ -82,6 +89,27 @@ class NextTradingAutoConfiguration {
     @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "db")
     fun dbApiClient(dbProperties: DbApiProperties): DbApiClient =
         DbApiClient(dbProperties, objectMapper)
+
+    /** LS증권 — 문서 기반 구현(실측 전), 상태 미검증 */
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "ls")
+    fun lsApiClient(lsProperties: LsApiProperties): LsApiClient =
+        LsApiClient(lsProperties, objectMapper)
+
+    /** 토스증권 — 실전 전용, 공식 OpenAPI 문서 기반, 실계좌 검증 전 */
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "toss")
+    fun tossApiClient(tossProperties: TossApiProperties): TossApiClient =
+        TossApiClient(tossProperties, objectMapper)
+
+    /** KB증권 — 실전 전용(오픈베타), 공개 명세 기반, 실계좌 검증 전 */
+    @Bean
+    @ConditionalOnMissingBean(BrokerClient::class)
+    @ConditionalOnProperty(prefix = "hermetix", name = ["broker"], havingValue = "kb")
+    fun kbApiClient(kbProperties: KbApiProperties): KbApiClient =
+        KbApiClient(kbProperties, objectMapper)
 
     @Bean
     @ConditionalOnMissingBean

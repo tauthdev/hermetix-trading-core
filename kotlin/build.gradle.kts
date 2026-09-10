@@ -7,7 +7,7 @@ plugins {
 subprojects {
     // JitPack 멀티모듈 좌표(com.github.tauthdev.hermetix-trading-core:모듈명)와 로컬 배포를 일치시킨다
     group = "com.github.tauthdev.hermetix-trading-core"
-    version = "0.6.0"
+    version = "0.7.0"
 
     apply(plugin = "org.jetbrains.kotlin.jvm")
     apply(plugin = "org.jetbrains.kotlin.plugin.spring")

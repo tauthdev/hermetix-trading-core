@@ -1,0 +1,47 @@
+{
+  "broker": "toss",
+  "description": "토스증권 Open API 응답 형태 — 공식 OpenAPI 문서(openapi.json v1.2.15)에서 재구성한 문서 기반 픽스처 (실계좌 검증 전). 라우트는 method+path 로 매칭. 실전 전용(샌드박스 없음)",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400 } },
+    { "method": "GET", "path": "/api/v1/accounts",
+      "body": { "result": [ { "accountNo": "12345678901", "accountSeq": 1, "accountType": "BROKERAGE" } ] } },
+    { "method": "GET", "path": "/api/v1/prices",
+      "body": { "result": [ { "symbol": "005930", "timestamp": "2026-09-10T09:30:00.123+09:00", "lastPrice": "70000", "currency": "KRW" } ] } },
+    { "method": "GET", "path": "/api/v1/candles",
+      "body": { "result": { "nextBefore": null, "candles": [
+        { "timestamp": "2026-09-10T00:00:00+09:00", "openPrice": "69500", "highPrice": "70500", "lowPrice": "69000", "closePrice": "70000", "volume": "12345678", "currency": "KRW" },
+        { "timestamp": "2026-09-09T00:00:00+09:00", "openPrice": "69000", "highPrice": "69800", "lowPrice": "68500", "closePrice": "69500", "volume": "11000000", "currency": "KRW" },
+        { "timestamp": "2026-09-08T00:00:00+09:00", "openPrice": "68000", "highPrice": "69200", "lowPrice": "67900", "closePrice": "69000", "volume": "10500000", "currency": "KRW" } ] } } },
+    { "method": "GET", "path": "/api/v1/buying-power",
+      "body": { "result": { "currency": "KRW", "cashBuyingPower": "1000000" } } },
+    { "method": "GET", "path": "/api/v1/holdings",
+      "body": { "result": {
+        "totalPurchaseAmount": { "krw": "204000", "usd": null },
+        "marketValue": { "amount": { "krw": "210000", "usd": null }, "amountAfterCost": { "krw": "209800", "usd": null } },
+        "profitLoss": { "amount": { "krw": "6000", "usd": null }, "amountAfterCost": { "krw": "5800", "usd": null }, "rate": "0.0294", "rateAfterCost": "0.0284" },
+        "dailyProfitLoss": { "amount": { "krw": "1500", "usd": null }, "rate": "0.0072" },
+        "items": [
+          { "symbol": "005930", "name": "삼성전자", "marketCountry": "KR", "currency": "KRW", "quantity": "3", "lastPrice": "70000", "averagePurchasePrice": "68000",
+            "marketValue": { "purchaseAmount": "204000", "amount": "210000", "amountAfterCost": "209800" },
+            "profitLoss": { "amount": "6000", "amountAfterCost": "5800", "rate": "0.0294", "rateAfterCost": "0.0284" },
+            "dailyProfitLoss": { "amount": "1500", "rate": "0.0072" }, "cost": { "commission": "30", "tax": "170" } } ] } } },
+    { "method": "POST", "path": "/api/v1/orders",
+      "body": { "result": { "orderId": "0d5QIHconformance1", "clientOrderId": "conformance-1" } } },
+    { "method": "GET", "path": "/api/v1/orders/0d5QIHconformance1",
+      "body": { "result": { "orderId": "0d5QIHconformance1", "symbol": "005930", "side": "BUY", "orderType": "LIMIT", "timeInForce": "DAY", "status": "PENDING",
+        "price": "70000", "quantity": "1", "orderAmount": null, "currency": "KRW", "orderedAt": "2026-09-10T09:30:00.000+09:00", "canceledAt": null,
+        "execution": { "filledQuantity": "0", "averageFilledPrice": null, "filledAmount": null, "commission": null, "tax": null, "filledAt": null, "settlementDate": null } } } },
+    { "method": "GET", "path": "/api/v1/orders",
+      "body": { "result": { "hasNext": false, "nextCursor": null, "orders": [
+        { "orderId": "0d5QIHconformance1", "symbol": "005930", "side": "BUY", "orderType": "LIMIT", "timeInForce": "DAY", "status": "PENDING",
+          "price": "70000", "quantity": "1", "orderAmount": null, "currency": "KRW", "orderedAt": "2026-09-10T09:30:00.000+09:00", "canceledAt": null,
+          "execution": { "filledQuantity": "0", "averageFilledPrice": null, "filledAmount": null, "commission": null, "tax": null, "filledAt": null, "settlementDate": null } },
+        { "orderId": "0d5QIHconformance0", "symbol": "005930", "side": "BUY", "orderType": "LIMIT", "timeInForce": "DAY", "status": "FILLED",
+          "price": "69000", "quantity": "2", "orderAmount": null, "currency": "KRW", "orderedAt": "2026-09-10T09:05:00.000+09:00", "canceledAt": null,
+          "execution": { "filledQuantity": "2", "averageFilledPrice": "69000", "filledAmount": "138000", "commission": "20", "tax": null, "filledAt": "2026-09-10T09:05:03.000+09:00", "settlementDate": "2026-09-12" } } ] } } },
+    { "method": "POST", "path": "/api/v1/orders/0d5QIHconformance1/cancel",
+      "body": { "result": { "orderId": "0d5QIHconformance2" } } }
+  ]
+}

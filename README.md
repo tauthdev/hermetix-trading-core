@@ -28,23 +28,20 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 | <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ | ✅ 호스트 자동 전환 | ✅ 검증 (모의) |
 | <img src="https://www.google.com/s2/favicons?domain=nhqv.com&sz=64" width="28"/> | `nh` | [NH투자증권 NH PLUG](https://www.nhplug.com/) | KRX 국내주식 | 1d | ✅ 호스트 분리 | ✅ | ⚠️ 미검증 (문서 기반) |
 | <img src="https://www.google.com/s2/favicons?domain=dbsec.co.kr&sz=64" width="28"/> | `db` | [DB증권](https://openapi.dbsec.co.kr/) | KRX 국내주식 | 1d | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=ls-sec.co.kr&sz=64" width="28"/> | `ls` | [LS증권](https://openapi.ls-sec.co.kr/) | KRX 국내주식 | 1d | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://openapi.tossinvest.com/) | KRX · 미국주식 | 1m · 1d | ❌ 샌드박스 없음 | ✅ | ⚠️ 미검증 (실전 전용) |
+| <img src="https://www.google.com/s2/favicons?domain=kbsec.com&sz=64" width="28"/> | `kb` | [KB증권](https://openapi.kbsec.com/) | KRX 국내주식 | 1d | ❌ "추후 제공" | ✅ 오픈베타 | ⚠️ 미검증 (실전 전용) |
 
 ✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 환경. KIS·키움의 실전은 호스트·TR ID 전환만 구현돼 있고 실계좌 스모크는 아직입니다.
 ⚠️ 미검증 = 공식 SDK·문서에서 엔드포인트와 필드명을 역추적해 만든 어댑터. 네 언어 컨포먼스 시나리오는 통과했지만 픽스처가 실측이 아니라 문서 재구성값이라, 모의계좌 실측으로 확인되기 전까지는 스펙 해석 오류가 있을 수 있습니다. 실측을 도와주실 분은 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)로 알려주세요.
+⚠️ 실전 전용 = 모의투자 환경이 없어 실계좌로만 검증할 수 있는 브로커(`toss`, `kb`). 반드시 `hermetix.live.enabled: true` 와 주문 금액 상한(`hermetix.risk.*`)을 함께 설정하고 소액으로 시작하세요.
 브로커별 지원 기능은 [`BrokerCapabilities`](kotlin/hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며(캔들 주기·지원 환경·시장·멱등키 등), 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
 
-**다음 어댑터 후보** ([2026-09 국내 증권사 오픈 API 조사](claudedocs/korean-broker-openapi-survey-2026-09.md)):
-
-| 증권사 | 판정 | 비고 |
-|---|---|---|
-| LS증권 | 다음 | REST, 모의 지원. TR 코드 기반 |
-| 토스증권 | 조건부 | 2026-08 REST 출시. **모의투자 없음** — 실전 전용 |
-| KB증권 | 조건부 | 2026-07 개인 오픈베타. 모의투자 "추후" |
-새 브로커를 원하시면 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)를 올려주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
+2026-09 조사 시점에 REST 오픈 API 를 제공하는 국내 증권사는 위 표로 모두 붙였습니다 ([조사 보고서](claudedocs/korean-broker-openapi-survey-2026-09.md) — 미래에셋·삼성·대신·신한은 REST 미제공). 새 브로커를 원하시면 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)를 올려주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
 
 ## 왜 Hermetix 인가
 
-- **브로커 독립 전략** — 같은 전략 코드가 넥스트증권(미국)과 한국투자·키움(KRX)에서 그대로 돕니다
+- **브로커 독립 전략** — 같은 전략 코드가 넥스트증권(미국)과 한국투자·키움·NH·DB·LS·토스·KB(KRX)에서 그대로 돕니다
 - **전략 = 클래스 하나** — 인증, 시세/계좌 조회, 주문 실행, 체결 추적은 전부 코어가 처리합니다
 - **소프트웨어 브라켓** — `Signal.Buy(takeProfitPrice=…, stopLossPrice=…)` 한 줄로 익절/손절 자동화
 - **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단), 주문 금액 상한
@@ -61,7 +58,7 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 
 | 언어 | 폴더 | 버전 | 의존성 | 설치 |
 |---|---|---|---|---|
-| Kotlin/JVM (레퍼런스) | `kotlin/` | 0.6.0 | Spring Boot | JitPack (아래) |
+| Kotlin/JVM (레퍼런스) | `kotlin/` | 0.7.0 | Spring Boot | JitPack (아래) |
 | [Python](python/) | `python/` | 0.2.0 | 0개 (stdlib, 3.10+) | `pip install ./python` |
 | [JavaScript/TypeScript](js/) | `js/` | 0.2.0 | decimal.js (Node 18+) | `npm install ./js` |
 | [Go](go/) | `go/` | — | shopspring/decimal | `go get github.com/tauthdev/hermetix-trading-core/go` |
@@ -80,10 +77,10 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (연결 계층이 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.6.0")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.7.0")
 
     // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.6.0")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.7.0")
 }
 ```
 
@@ -162,6 +159,28 @@ hermetix:
 #  db:
 #    app-key: ${DB_APP_KEY:}
 #    app-secret: ${DB_APP_SECRET:}
+
+# LS증권 (⚠️ 미검증) — 모의투자용 appkey 로 모의, 실전 키면 실전 (호스트 동일)
+#  broker: ls
+#  ls:
+#    app-key: ${LS_APP_KEY:}
+#    app-secret: ${LS_APP_SECRET:}
+
+# 토스증권 (⚠️ 실전 전용, 미검증) — 샌드박스 없음. live.enabled 와 risk 상한 필수. account-seq 비우면 첫 위탁계좌
+#  broker: toss
+#  live.enabled: true
+#  toss:
+#    client-id: ${TOSS_CLIENT_ID:}
+#    client-secret: ${TOSS_CLIENT_SECRET:}
+#    account-seq: ${TOSS_ACCOUNT_SEQ:}
+
+# KB증권 (⚠️ 실전 전용 오픈베타, 미검증) — chart-market-clsf 는 차트 종목의 시장 (0 KOSPI / 1 KOSDAQ)
+#  broker: kb
+#  live.enabled: true
+#  kb:
+#    app-key: ${KB_APP_KEY:}
+#    app-secret: ${KB_APP_SECRET:}
+#    chart-market-clsf: "0"
 ```
 
 ## 실전투자로 전환

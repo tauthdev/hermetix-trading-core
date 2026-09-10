@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
-  DbClient, Decimal, KisClient, KiwoomClient, NextClient, NhClient, RateLimitError, RateLimiter, verifyBrokerConformance,
+  DbClient, Decimal, KbClient, KisClient, KiwoomClient, LsClient, NextClient, NhClient, RateLimitError, RateLimiter, TossClient,
+  verifyBrokerConformance,
 } from "../src/index.js";
 import type { BrokerClient } from "../src/index.js";
 
@@ -57,6 +58,9 @@ test("kiwoom 어댑터는 컨포먼스 시나리오를 통과한다", () => run(
 // accountNo 를 비워 /n2/acctinfo 로 모의(acct_type=03) 계좌를 고르는 경로까지 검증. 토큰은 운영 호스트 전용 — 테스트에선 같은 가짜 서버
 test("nh 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)", () => run("nh", () => new NhClient("k", "s", "", "http://nh.test", "http://nh.test", "KRX", "KRX", 1)));
 test("db 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)", () => run("db", () => new DbClient("k", "s", "http://db.test", "", "J", 1)));
+test("ls 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)", () => run("ls", () => new LsClient("k", "s", "http://ls.test", "", "", 1, 1)));
+test("toss 어댑터는 컨포먼스 시나리오를 통과한다 (실전 전용)", () => run("toss", () => new TossClient("c_conf", "s_conf", "", "http://toss.test", 1)));
+test("kb 어댑터는 컨포먼스 시나리오를 통과한다 (실전 전용)", () => run("kb", () => new KbClient("k", "s", "http://kb.test", "1", "K", "0", 1)));
 
 test("RateLimiter: 쓰로틀·백오프·Retry-After·재시도 소진", async () => {
   const sleeps: number[] = [];

@@ -11,6 +11,12 @@ import com.tripleauth.hermetix.client.NextApiProperties
 import com.tripleauth.hermetix.client.TokenManager
 import com.tripleauth.hermetix.client.db.DbApiClient
 import com.tripleauth.hermetix.client.db.DbApiProperties
+import com.tripleauth.hermetix.client.kb.KbApiClient
+import com.tripleauth.hermetix.client.kb.KbApiProperties
+import com.tripleauth.hermetix.client.ls.LsApiClient
+import com.tripleauth.hermetix.client.ls.LsApiProperties
+import com.tripleauth.hermetix.client.toss.TossApiClient
+import com.tripleauth.hermetix.client.toss.TossApiProperties
 import com.tripleauth.hermetix.client.nh.NhApiClient
 import com.tripleauth.hermetix.client.nh.NhApiProperties
 import com.tripleauth.hermetix.client.kis.KisApiClient
@@ -116,5 +122,21 @@ class BrokerConformanceTest {
     @Test
     fun `db 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)`() = run("db") {
         DbApiClient(DbApiProperties(baseUrl = baseUrl(), appKey = "k", appSecret = "s", throttleMillis = 1), objectMapper)
+    }
+
+    @Test
+    fun `ls 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처)`() = run("ls") {
+        LsApiClient(LsApiProperties(baseUrl = baseUrl(), appKey = "k", appSecret = "s", throttleMillis = 1, chartThrottleMillis = 1), objectMapper)
+    }
+
+    @Test
+    fun `toss 어댑터는 컨포먼스 시나리오를 통과한다 (문서 기반 픽스처, 실전 전용)`() = run("toss") {
+        // accountSeq 를 비워 /api/v1/accounts 로 BROKERAGE 계좌를 고르는 경로까지 검증
+        TossApiClient(TossApiProperties(baseUrl = baseUrl(), clientId = "c_conf", clientSecret = "s_conf", throttleMillis = 1), objectMapper)
+    }
+
+    @Test
+    fun `kb 어댑터는 컨포먼스 시나리오를 통과한다 (공개 명세 픽스처, 실전 전용)`() = run("kb") {
+        KbApiClient(KbApiProperties(baseUrl = baseUrl(), appKey = "k", appSecret = "s", throttleMillis = 1), objectMapper)
     }
 }
