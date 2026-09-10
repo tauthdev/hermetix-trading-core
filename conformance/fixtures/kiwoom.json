@@ -1,0 +1,36 @@
+{
+  "broker": "kiwoom",
+  "description": "키움증권 REST 모의투자 응답 형태 (2026-08 실측 필드: 부호 접두 가격, zero-padded 금액, A 프리픽스 종목코드). 라우트는 path(토큰) 또는 api-id 헤더로 매칭",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/token",
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "token": "tok-conformance", "token_type": "bearer", "expires_dt": "20261231235959" } },
+    { "header": ["api-id", "ka10001"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "stk_cd": "005930", "stk_nm": "삼성전자",
+        "cur_prc": "-70000", "trde_qty": "12345678", "pred_pre": "-500", "flu_rt": "-0.71" } },
+    { "header": ["api-id", "ka10081"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "stk_cd": "005930", "stk_dt_pole_chart_qry": [
+        { "dt": "20260910", "open_pric": "69500", "high_pric": "70500", "low_pric": "69000", "cur_prc": "-70000", "trde_qty": "12345678" },
+        { "dt": "20260909", "open_pric": "69000", "high_pric": "69800", "low_pric": "68500", "cur_prc": "+69500", "trde_qty": "11000000" },
+        { "dt": "20260908", "open_pric": "68000", "high_pric": "69200", "low_pric": "67900", "cur_prc": "69000", "trde_qty": "10500000" } ] } },
+    { "header": ["api-id", "kt00001"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "entr": "000000001000000", "ord_alow_amt": "000000001000000" } },
+    { "header": ["api-id", "kt00018"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "prsm_dpst_aset_amt": "000000001210000", "tot_evlt_amt": "000000000210000",
+        "acnt_evlt_remn_indv_tot": [
+          { "stk_cd": "A005930", "stk_nm": "삼성전자", "rmnd_qty": "000000000003", "pur_pric": "000000068000", "cur_prc": "-70000",
+            "evlt_amt": "000000210000", "evltv_prft": "6000", "prft_rt": "2.94" } ] } },
+    { "header": ["api-id", "kt10000"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "ord_no": "0001234", "dmst_stex_tp": "KRX" } },
+    { "header": ["api-id", "kt10001"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "ord_no": "0001235", "dmst_stex_tp": "KRX" } },
+    { "header": ["api-id", "ka10075"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "oso": [
+        { "ord_no": "0001234", "stk_cd": "A005930", "stk_nm": "삼성전자", "io_tp_nm": "현금매수", "ord_qty": "000000000001", "oso_qty": "000000000001", "ord_pric": "+70000", "tm": "091500" } ] } },
+    { "header": ["api-id", "kt10003"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "ord_no": "0001236", "base_orig_ord_no": "0001234", "cncl_qty": "000000000001" } },
+    { "header": ["api-id", "ka10076"],
+      "body": { "return_code": 0, "return_msg": "정상적으로 처리되었습니다", "cntr": [
+        { "ord_no": "0001100", "stk_cd": "A005930", "stk_nm": "삼성전자", "io_tp_nm": "현금매수", "cntr_qty": "000000000002", "cntr_pric": "+69000", "tm": "090500" } ] } }
+  ]
+}

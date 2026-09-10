@@ -30,7 +30,7 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 
 ✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 어댑터.
 브로커별 지원 기능은 [`BrokerCapabilities`](hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며, 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
-새 브로커를 원하시면 [이슈로 요청](../../issues)해주세요 — 어댑터 기여 방법은 [아키텍처 문서](docs/architecture.md#브로커-어댑터)에 있습니다.
+새 브로커를 원하시면 [이슈로 요청](../../issues)해주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
 
 ## 왜 Hermetix 인가
 

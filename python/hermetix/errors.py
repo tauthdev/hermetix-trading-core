@@ -21,7 +21,13 @@ class AuthError(BrokerApiError):
 
 
 class RateLimitError(BrokerApiError):
-    """레이트리밋 초과 - 어댑터의 자동 재시도가 소진된 뒤에만 전파된다"""
+    """레이트리밋 초과 - 어댑터의 자동 재시도(RateLimiter)가 소진된 뒤에만 전파된다.
+    retry_after_seconds 는 서버가 Retry-After 로 알려준 대기 시간 (없으면 None → 어댑터 기본 백오프)"""
+
+    def __init__(self, http_status: int, error_code: str | None, message: str | None,
+                 retry_after_seconds: float | None = None):
+        super().__init__(http_status, error_code, message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class MarketClosedError(BrokerApiError):

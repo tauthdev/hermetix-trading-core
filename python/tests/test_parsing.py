@@ -351,7 +351,7 @@ def test_kis_environment_host_and_tr_prefix():
     live = KisClient("k", "s", "50199202", environment=TradingEnvironment.LIVE)
     assert paper._http.base_url == KisClient.PAPER_URL and paper._tr("TTC0802U") == "VTTC0802U"
     assert live._http.base_url == KisClient.LIVE_URL and live._tr("TTC0802U") == "TTTC0802U"
-    assert paper._throttle.min_interval == 0.6 and live._throttle.min_interval == 0.1
+    assert paper._limiter.min_interval == 0.6 and live._limiter.min_interval == 0.1
     assert KisClient("k", "s", "c", base_url="http://custom")._http.base_url == "http://custom"
     assert KiwoomClient("k", "s", environment=TradingEnvironment.LIVE)._http.base_url == KiwoomClient.LIVE_URL
     assert KiwoomClient("k", "s")._http.base_url == KiwoomClient.PAPER_URL

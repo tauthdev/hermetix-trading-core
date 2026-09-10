@@ -8,6 +8,7 @@ import com.tripleauth.hermetix.broker.BrokerCapabilities
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
+import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
@@ -93,8 +94,12 @@ class KisApiClient(
     @Volatile
     private var cachedToken: Pair<String, Instant>? = null
 
-    private val throttleLock = Object()
-    private var lastCallAt: Long = 0
+    /** 초당 요청 제한 — 쓰로틀 + EGW00201 백오프 재시도 */
+    private val limiter = RateLimiter(
+        minIntervalMillis = properties.resolvedThrottleMillis(),
+        maxRetries = 3,
+        backoffMillis = { attempt -> 1000L * attempt },
+    )
 
     // ------------------------------------------------------------------ market
 
@@ -352,23 +357,7 @@ class KisApiClient(
         trId: String,
         query: Map<String, String> = emptyMap(),
         body: Map<String, String>? = null,
-    ): JsonNode {
-        var attempt = 0
-        while (true) {
-            try {
-                return callOnce(method, path, trId, query, body)
-            } catch (e: RateLimitError) {
-                // 모의 서버 초당 요청 제한(EGW00201)은 잠시 대기 후 재시도한다
-                if (attempt < 3) {
-                    attempt++
-                    logger.warn { "KIS rate limit - retry $attempt/3 after backoff" }
-                    Thread.sleep(1000L * attempt)
-                } else {
-                    throw e
-                }
-            }
-        }
-    }
+    ): JsonNode = limiter.execute("KIS $trId") { callOnce(method, path, trId, query, body) }
 
     private fun callOnce(
         method: HttpMethod,
@@ -377,8 +366,6 @@ class KisApiClient(
         query: Map<String, String> = emptyMap(),
         body: Map<String, String>? = null,
     ): JsonNode {
-        throttle()
-
         val response = restClient.method(method)
             .uri { builder ->
                 builder.path(path).apply { query.forEach { (k, v) -> queryParam(k, v) } }.build()
@@ -416,15 +403,6 @@ class KisApiClient(
         return response
     }
 
-    /** 모의 서버 초당 요청 제한 회피 — 호출 간 최소 간격 보장 */
-    private fun throttle() {
-        synchronized(throttleLock) {
-            val wait = lastCallAt + properties.resolvedThrottleMillis() - System.currentTimeMillis()
-            if (wait > 0) Thread.sleep(wait)
-            lastCallAt = System.currentTimeMillis()
-        }
-    }
-
     private fun token(): String {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
@@ -440,7 +418,7 @@ class KisApiClient(
             return cached.first
         }
 
-        throttle()
+        limiter.throttle()
         val node = restClient.post()
             .uri("/oauth2/tokenP")
             .contentType(MediaType.APPLICATION_JSON)

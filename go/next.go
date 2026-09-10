@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,8 @@ type NextClient struct {
 	baseURL      string
 	environment  TradingEnvironment
 	http         *http.Client
+	// 429 는 Retry-After 만큼 기다렸다가 최대 2회 재시도. 쓰로틀은 없다 (초당 한도가 넉넉함)
+	limiter      *rateLimiter
 	tokenMu      sync.Mutex
 	token        string
 	tokenExpires time.Time
@@ -114,8 +117,15 @@ func NewNextClient(clientID, clientSecret string) *NextClient {
 		baseURL:     "https://openapi.nextsecurities.dev",
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
+		limiter:     newRateLimiter(0, 2, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second }),
 	}
 	c.call = c.request
+	return c
+}
+
+// SetBaseURL - 호스트를 직접 지정 (테스트·사설 배포용).
+func (c *NextClient) SetBaseURL(baseURL string) *NextClient {
+	c.baseURL = baseURL
 	return c
 }
 
@@ -424,30 +434,33 @@ func (c *NextClient) request(method, path string, account bool, jsonBody map[str
 			headers["Content-Type"] = "application/json"
 			payload, _ = json.Marshal(jsonBody)
 		}
-		status, body, err := httpJSON(c.http, method, c.baseURL+path, headers, payload)
+		status, body, resHeaders, err := httpJSONHeaders(c.http, method, c.baseURL+path, headers, payload)
 		if err != nil {
 			return nil, err
 		}
 		if status < 200 || status >= 300 {
-			return nil, mapNextError(status, obj(body, "error"))
+			retryAfter, _ := strconv.ParseFloat(strings.TrimSpace(resHeaders.Get("Retry-After")), 64)
+			return nil, mapNextError(status, obj(body, "error"), retryAfter)
 		}
 		return body, nil
 	}
 
-	body, err := do()
-	var authErr *AuthError
-	if errors.As(err, &authErr) {
-		c.tokenMu.Lock()
-		c.token = "" // 토큰 만료 - 1회 재발급 후 재시도
-		c.tokenMu.Unlock()
-		return do()
-	}
-	return body, err
+	return c.limiter.execute("next", func() (map[string]any, error) {
+		body, err := do()
+		var authErr *AuthError
+		if errors.As(err, &authErr) {
+			c.tokenMu.Lock()
+			c.token = "" // 토큰 만료 - 1회 재발급 후 재시도
+			c.tokenMu.Unlock()
+			return do()
+		}
+		return body, err
+	})
 }
 
 // mapNextError — v1.3 에러 type ↔ HTTP: validation(400) authentication(401) permission(403) not_found(404)
 // conflict(409) business_rule(422) locked(423, 킬스위치 trading-halted) rate_limit(429) server(5xx)
-func mapNextError(status int, e map[string]any) error {
+func mapNextError(status int, e map[string]any, retryAfterSeconds float64) error {
 	code := str(e["code"])
 	errType := str(e["type"])
 	msg := fmt.Sprintf("Next(%s) %s requestId=%s", code, str(e["message"]), str(e["requestId"]))
@@ -455,7 +468,7 @@ func mapNextError(status int, e map[string]any) error {
 	case status == 401 || errType == "authentication":
 		return newAuthError(status, code, msg)
 	case status == 429:
-		return newRateLimitError(status, code, msg)
+		return newRateLimitErrorWithRetryAfter(status, code, msg, retryAfterSeconds)
 	case errType == "permission":
 		// 조회전용 키(insufficient-scope)·계좌 불일치 — 자금 부족으로 오인하지 않는다
 		return &BrokerAPIError{status, code, msg}

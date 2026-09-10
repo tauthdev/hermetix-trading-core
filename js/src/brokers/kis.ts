@@ -8,7 +8,7 @@
  */
 import { Decimal } from "decimal.js";
 import {
-  BrokerClient, D, DorNull, Throttle, httpJson, krxCalendar, krxTickRound, kstToday, kstYyyymmdd, sleep,
+  BrokerClient, D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstToday, kstYyyymmdd,
 } from "../broker.js";
 import { AuthError, BrokerApiError, MarketClosedError, RateLimitError } from "../errors.js";
 import type {
@@ -36,7 +36,8 @@ export class KisClient implements BrokerClient {
 
   private token: string | null = null;
   private tokenExpiresAt = 0;
-  private readonly throttle: Throttle;
+  /** 초당 요청 제한 — 쓰로틀 + EGW00201 백오프 재시도 */
+  private readonly limiter: RateLimiter;
   private readonly tracked = new Map<string, Tracked>();
 
   static readonly PAPER_URL = "https://openapivts.koreainvestment.com:29443";
@@ -58,7 +59,7 @@ export class KisClient implements BrokerClient {
   ) {
     const live = environment === "LIVE";
     this.baseUrl = baseUrl || (live ? KisClient.LIVE_URL : KisClient.PAPER_URL);
-    this.throttle = new Throttle(throttleMs || (live ? 100 : 600));
+    this.limiter = new RateLimiter(throttleMs || (live ? 100 : 600), 3, (attempt) => 1000 * attempt);
   }
 
   /** 계좌 TR ID — 모의 V, 실전 T 프리픽스 (예: tr("TTC0802U") → VTTC0802U / TTTC0802U) */
@@ -247,24 +248,13 @@ export class KisClient implements BrokerClient {
     method: string, path: string, trId: string,
     opts: { query?: Record<string, string>; json?: Record<string, string> } = {},
   ): Promise<Record<string, unknown>> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await this.callOnce(method, path, trId, opts);
-      } catch (e) {
-        if (e instanceof RateLimitError && attempt < 3) {
-          await sleep(1000 * (attempt + 1)); // 초당 요청 제한 백오프
-          continue;
-        }
-        throw e;
-      }
-    }
+    return this.limiter.execute(() => this.callOnce(method, path, trId, opts), `KIS ${trId}`);
   }
 
   private async callOnce(
     method: string, path: string, trId: string,
     opts: { query?: Record<string, string>; json?: Record<string, string> },
   ): Promise<Record<string, unknown>> {
-    await this.throttle.wait();
     let url = this.baseUrl + path;
     if (opts.query) url += "?" + new URLSearchParams(opts.query).toString();
     const [status, body] = await httpJson(url, {
@@ -289,7 +279,7 @@ export class KisClient implements BrokerClient {
 
   private async getToken(): Promise<string> {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
-    await this.throttle.wait();
+    await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/tokenP`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

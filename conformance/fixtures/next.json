@@ -1,0 +1,53 @@
+{
+  "broker": "next",
+  "description": "넥스트증권 공개 스펙 v1.3 응답 형태 (2026-09 문서 기준). 라우트는 method+path 로 매칭",
+  "scenario": { "symbol": "AAPL", "quantity": "1", "limitPrice": "200" },
+  "routes": [
+    { "method": "POST", "path": "/v1/oauth/token",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 43200 } },
+    { "method": "GET", "path": "/v1/market/quotes",
+      "body": { "quotes": [
+        { "symbol": "AAPL", "outcome": "OK", "session": "REGULAR", "requestedAt": "2026-09-10T23:10:00+09:00",
+          "price": "308.91", "previousClose": "333.43", "change": "-24.52", "changeRate": "-7.3539",
+          "bidPrice": "308.90", "bidSize": "100", "askPrice": "308.92", "askSize": "200",
+          "volume": "132756799", "lastTradeAt": "2026-09-10T23:09:58+09:00" } ] } },
+    { "method": "GET", "path": "/v1/market/candles",
+      "body": { "symbol": "AAPL", "interval": "1d", "nextCursor": null, "candles": [
+        { "time": "2026-09-08T22:30:00+09:00", "session": "REGULAR", "open": "330.10", "high": "335.00", "low": "329.50", "close": "333.43", "volume": "51234567" },
+        { "time": "2026-09-09T22:30:00+09:00", "session": "REGULAR", "open": "339.73", "high": "344.56", "low": "337.35", "close": "338.19", "volume": "56298904" },
+        { "time": "2026-09-10T22:30:00+09:00", "session": "REGULAR", "open": "335.00", "high": "336.20", "low": "305.11", "close": "308.91", "volume": "132756799" } ] } },
+    { "method": "GET", "path": "/v1/market/calendar",
+      "body": { "calendar": [
+        { "date": "2026-09-10", "status": "OPEN", "holidayName": null, "sessions": [
+          { "type": "PRE", "open": "2026-09-10T17:00:00+09:00", "close": "2026-09-10T22:30:00+09:00" },
+          { "type": "REGULAR", "open": "2026-09-10T22:30:00+09:00", "close": "2026-09-11T05:00:00+09:00" },
+          { "type": "AFTER", "open": "2026-09-11T05:00:00+09:00", "close": "2026-09-11T09:00:00+09:00" } ] },
+        { "date": "2026-09-11", "status": "OPEN", "holidayName": null, "sessions": [
+          { "type": "REGULAR", "open": "2026-09-11T22:30:00+09:00", "close": "2026-09-12T05:00:00+09:00" } ] },
+        { "date": "2026-09-12", "status": "CLOSED", "holidayName": null, "sessions": [] } ] } },
+    { "method": "GET", "path": "/v1/account",
+      "body": { "accountId": "acc_main", "currency": "USD", "cashAmount": "1000.50", "requestedAt": "2026-09-10T23:10:00+09:00" } },
+    { "method": "GET", "path": "/v1/account/holdings",
+      "body": { "currency": "USD", "requestedAt": "2026-09-10T23:10:00+09:00", "holdings": [
+        { "symbol": "AAPL", "name": "Apple Inc.", "quantity": "2", "sellableQuantity": "2", "averageBuyPrice": "300.00",
+          "currentPrice": "308.91", "purchaseAmount": "600.00", "evaluationAmount": "617.82", "evaluationPnl": "17.82", "evaluationPnlRate": "2.97" } ] } },
+    { "method": "GET", "path": "/v1/account/buying-power",
+      "body": { "accountId": "acc_main", "currency": "USD", "buyingPower": "1000.50", "requestedAt": "2026-09-10T23:10:00+09:00" } },
+    { "method": "POST", "path": "/v1/orders",
+      "body": { "orderId": "ord_conf_1", "market": "US", "status": "SUBMITTED", "requestedAt": "2026-09-10T23:10:00+09:00" } },
+    { "method": "GET", "path": "/v1/orders/fills",
+      "body": { "nextCursor": null, "fills": [
+        { "orderId": "ord_conf_0", "market": "US", "symbol": "AAPL", "side": "BUY", "quantity": "2", "price": "300.00", "amount": "600.00", "fee": "0.10", "filledAt": "2026-09-09T23:11:00+09:00" } ] } },
+    { "method": "GET", "path": "/v1/orders/ord_conf_1",
+      "body": { "orderId": "ord_conf_1", "requestId": "conformance-1", "market": "US", "symbol": "AAPL", "side": "BUY", "orderType": "LIMIT",
+        "timeInForce": "DAY", "status": "SUBMITTED", "quantity": "1", "filledQuantity": "0", "limitPrice": "200",
+        "requestedAt": "2026-09-10T23:10:00+09:00", "updatedAt": "2026-09-10T23:10:00+09:00" } },
+    { "method": "GET", "path": "/v1/orders",
+      "body": { "nextCursor": null, "orders": [
+        { "orderId": "ord_conf_1", "requestId": "conformance-1", "market": "US", "symbol": "AAPL", "side": "BUY", "orderType": "LIMIT",
+          "timeInForce": "DAY", "status": "SUBMITTED", "quantity": "1", "filledQuantity": "0", "limitPrice": "200",
+          "requestedAt": "2026-09-10T23:10:00+09:00", "updatedAt": "2026-09-10T23:10:00+09:00" } ] } },
+    { "method": "DELETE", "path": "/v1/orders/ord_conf_1",
+      "body": { "orderId": "ord_conf_1", "status": "PENDING_CANCEL", "requestedAt": "2026-09-10T23:12:00+09:00" } }
+  ]
+}

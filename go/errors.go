@@ -18,7 +18,13 @@ func (e *BrokerAPIError) Error() string {
 }
 
 type AuthError struct{ BrokerAPIError }
-type RateLimitError struct{ BrokerAPIError }
+
+// RateLimitError - 레이트리밋 초과. 어댑터의 자동 재시도(rateLimiter)가 소진된 뒤에만 전파된다.
+// RetryAfterSeconds 는 서버 Retry-After (0 이면 없음 → 어댑터 기본 백오프).
+type RateLimitError struct {
+	BrokerAPIError
+	RetryAfterSeconds float64
+}
 type MarketClosedError struct{ BrokerAPIError }
 type InsufficientFundsError struct{ BrokerAPIError }
 type InvalidOrderError struct{ BrokerAPIError }
@@ -28,8 +34,13 @@ func newAuthError(status int, code, msg string) *AuthError {
 	return &AuthError{BrokerAPIError{status, code, msg}}
 }
 
+// newRateLimitErrorWithRetryAfter - 서버 Retry-After(초)를 담는다. 0 이면 어댑터 기본 백오프.
+func newRateLimitErrorWithRetryAfter(status int, code, msg string, retryAfterSeconds float64) *RateLimitError {
+	return &RateLimitError{BrokerAPIError{status, code, msg}, retryAfterSeconds}
+}
+
 func newRateLimitError(status int, code, msg string) *RateLimitError {
-	return &RateLimitError{BrokerAPIError{status, code, msg}}
+	return &RateLimitError{BrokerAPIError{status, code, msg}, 0}
 }
 
 func newMarketClosedError(status int, code, msg string) *MarketClosedError {

@@ -7,7 +7,7 @@
  */
 import { Decimal } from "decimal.js";
 import {
-  BrokerClient, D, DorNull, Throttle, httpJson, krxCalendar, krxTickRound, kstYyyymmdd, sleep,
+  BrokerClient, D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd,
 } from "../broker.js";
 import { AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError } from "../errors.js";
 import type {
@@ -42,7 +42,8 @@ export class KiwoomClient implements BrokerClient {
 
   private token: string | null = null;
   private tokenExpiresAt = 0;
-  private readonly throttle: Throttle;
+  /** TR 당 초당 1회 유량 제한 — 쓰로틀 + 백오프 재시도 */
+  private readonly limiter: RateLimiter;
 
   static readonly PAPER_URL = "https://mockapi.kiwoom.com";
   static readonly LIVE_URL = "https://api.kiwoom.com";
@@ -57,7 +58,7 @@ export class KiwoomClient implements BrokerClient {
     readonly environment: TradingEnvironment = "PAPER",
   ) {
     this.baseUrl = baseUrl || (environment === "LIVE" ? KiwoomClient.LIVE_URL : KiwoomClient.PAPER_URL);
-    this.throttle = new Throttle(throttleMs);
+    this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1100 * attempt);
   }
 
   // ---------------------------------------------------------------- market
@@ -234,21 +235,10 @@ export class KiwoomClient implements BrokerClient {
   }
 
   private async call(path: string, apiId: string, json: Record<string, string>): Promise<Record<string, unknown>> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await this.callOnce(path, apiId, json);
-      } catch (e) {
-        if (e instanceof RateLimitError && attempt < 3) {
-          await sleep(1100 * (attempt + 1)); // TR당 유량 제한 백오프
-          continue;
-        }
-        throw e;
-      }
-    }
+    return this.limiter.execute(() => this.callOnce(path, apiId, json), `키움 ${apiId}`);
   }
 
   private async callOnce(path: string, apiId: string, json: Record<string, string>): Promise<Record<string, unknown>> {
-    await this.throttle.wait();
     const [status, body] = await httpJson(this.baseUrl + path, {
       method: "POST",
       headers: {
@@ -271,7 +261,7 @@ export class KiwoomClient implements BrokerClient {
 
   private async getToken(): Promise<string> {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
-    await this.throttle.wait();
+    await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json;charset=UTF-8" },

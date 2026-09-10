@@ -8,6 +8,7 @@ import com.tripleauth.hermetix.broker.BrokerCapabilities
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
+import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
@@ -84,8 +85,12 @@ class KiwoomApiClient(
     @Volatile
     private var cachedToken: Pair<String, Instant>? = null
 
-    private val throttleLock = Object()
-    private var lastCallAt: Long = 0
+    /** TR 당 초당 1회 유량 제한 — 쓰로틀 + 백오프 재시도 */
+    private val limiter = RateLimiter(
+        minIntervalMillis = properties.throttleMillis,
+        maxRetries = 3,
+        backoffMillis = { attempt -> 1100L * attempt },
+    )
 
     // ------------------------------------------------------------------ market
 
@@ -306,27 +311,10 @@ class KiwoomApiClient(
         )
     }
 
-    private fun call(path: String, apiId: String, body: Map<String, String>): JsonNode {
-        var attempt = 0
-        while (true) {
-            try {
-                return callOnce(path, apiId, body)
-            } catch (e: RateLimitError) {
-                // 키움 유량 제한(초당 1회/TR) — 잠시 대기 후 재시도
-                if (attempt < 3) {
-                    attempt++
-                    logger.warn { "키움 rate limit($apiId) - retry $attempt/3" }
-                    Thread.sleep(1100L * attempt)
-                } else {
-                    throw e
-                }
-            }
-        }
-    }
+    private fun call(path: String, apiId: String, body: Map<String, String>): JsonNode =
+        limiter.execute("키움 $apiId") { callOnce(path, apiId, body) }
 
     private fun callOnce(path: String, apiId: String, body: Map<String, String>): JsonNode {
-        throttle()
-
         return restClient.post()
             .uri(path)
             .contentType(MediaType.APPLICATION_JSON)
@@ -353,14 +341,6 @@ class KiwoomApiClient(
             }!!
     }
 
-    private fun throttle() {
-        synchronized(throttleLock) {
-            val wait = lastCallAt + properties.throttleMillis - System.currentTimeMillis()
-            if (wait > 0) Thread.sleep(wait)
-            lastCallAt = System.currentTimeMillis()
-        }
-    }
-
     private fun token(): String {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
@@ -376,7 +356,7 @@ class KiwoomApiClient(
             return cached.first
         }
 
-        throttle()
+        limiter.throttle()
         val node = restClient.post()
             .uri("/oauth2/token")
             .contentType(MediaType.APPLICATION_JSON)

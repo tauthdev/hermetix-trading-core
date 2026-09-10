@@ -14,8 +14,11 @@ package com.tripleauth.hermetix.broker
 class AuthError(httpStatus: Int, errorCode: String?, message: String?) :
     BrokerApiException(httpStatus, errorCode, message)
 
-/** 레이트리밋 초과 — 어댑터의 자동 재시도가 모두 소진된 뒤에만 전파된다 */
-class RateLimitError(httpStatus: Int, errorCode: String?, message: String?) :
+/**
+ * 레이트리밋 초과 — 어댑터의 자동 재시도([RateLimiter])가 모두 소진된 뒤에만 전파된다.
+ * [retryAfterSeconds] 는 서버가 `Retry-After` 로 알려준 대기 시간 (없으면 null → 어댑터 기본 백오프)
+ */
+class RateLimitError(httpStatus: Int, errorCode: String?, message: String?, val retryAfterSeconds: Long? = null) :
     BrokerApiException(httpStatus, errorCode, message)
 
 /** 장 마감/휴장으로 주문 불가 */

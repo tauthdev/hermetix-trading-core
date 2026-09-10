@@ -3,7 +3,9 @@ package hermetix
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -66,19 +68,92 @@ type throttle struct {
 	mu       sync.Mutex
 	last     time.Time
 	interval time.Duration
+	sleep    func(time.Duration)
+	now      func() time.Time
 }
 
 func newThrottle(interval time.Duration) *throttle {
-	return &throttle{interval: interval}
+	return &throttle{interval: interval, sleep: time.Sleep, now: time.Now}
 }
 
 func (t *throttle) wait() {
+	if t.interval <= 0 {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if delta := t.interval - time.Since(t.last); delta > 0 {
-		time.Sleep(delta)
+	if !t.last.IsZero() {
+		if delta := t.interval - t.now().Sub(t.last); delta > 0 {
+			t.sleep(delta)
+		}
 	}
-	t.last = time.Now()
+	t.last = t.now()
+}
+
+// maxRetryAfter - 서버 Retry-After 를 그대로 믿되 상한을 둔다 (틱 하나가 무한히 막히지 않도록).
+const maxRetryAfter = 30 * time.Second
+
+// rateLimiter - 어댑터 공용 레이트리밋 부품: 쓰로틀 + RateLimitError 백오프 재시도.
+// 재시도가 소진되면 마지막 에러를 그대로 돌려준다 (엔진은 그때서야 틱을 건너뛴다).
+type rateLimiter struct {
+	throttle   *throttle
+	maxRetries int
+	backoff    func(attempt int) time.Duration
+	sleep      func(time.Duration)
+}
+
+func newRateLimiter(interval time.Duration, maxRetries int, backoff func(attempt int) time.Duration) *rateLimiter {
+	return &rateLimiter{throttle: newThrottle(interval), maxRetries: maxRetries, backoff: backoff, sleep: time.Sleep}
+}
+
+func (r *rateLimiter) execute(label string, fn func() (map[string]any, error)) (map[string]any, error) {
+	for attempt := 0; ; {
+		r.throttle.wait()
+		body, err := fn()
+		var rateLimited *RateLimitError
+		if err == nil || !errors.As(err, &rateLimited) || attempt >= r.maxRetries {
+			return body, err
+		}
+		attempt++
+		wait := r.backoff(attempt)
+		if rateLimited.RetryAfterSeconds > 0 {
+			wait = time.Duration(rateLimited.RetryAfterSeconds * float64(time.Second))
+			if wait > maxRetryAfter {
+				wait = maxRetryAfter
+			}
+		}
+		log.Printf("WARN hermetix rate limit(%s) - retry %d/%d after %s", label, attempt, r.maxRetries, wait)
+		r.sleep(wait)
+	}
+}
+
+// httpJSONHeaders - httpJSON + 응답 헤더 (Retry-After 등).
+func httpJSONHeaders(client *http.Client, method, rawURL string, headers map[string]string, body []byte) (int, map[string]any, http.Header, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, rawURL, reader)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return res.StatusCode, nil, res.Header, err
+	}
+	parsed := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &parsed)
+	}
+	return res.StatusCode, parsed, res.Header, nil
 }
 
 var kst = mustLoadKST()

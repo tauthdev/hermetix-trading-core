@@ -37,7 +37,9 @@ export {
   MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "./errors.js";
 export type { BrokerClient } from "./broker.js";
-export { krxTickRound } from "./broker.js";
+export { RateLimiter, Throttle, krxTickRound } from "./broker.js";
+export { verifyBrokerConformance } from "./testing.js";
+export type { ConformanceReport, ConformanceScenario } from "./testing.js";
 export { NextClient } from "./brokers/next.js";
 export { KisClient } from "./brokers/kis.js";
 export { KiwoomClient } from "./brokers/kiwoom.js";

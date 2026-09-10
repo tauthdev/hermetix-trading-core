@@ -1,5 +1,6 @@
 /** 브로커 추상화 인터페이스 + 공용 HTTP/유틸. */
 import { Decimal } from "decimal.js";
+import { RateLimitError } from "./errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
   Fill, Holding, MarketDay, Order, Quote, TradingEnvironment,
@@ -23,10 +24,11 @@ export interface BrokerClient {
 }
 
 /** fetch 기반 최소 HTTP - (status, parsedJson) 반환. 4xx/5xx 도 본문 파싱. */
+/** (status, parsedJson, headers) — headers 는 소문자 키. 테스트 스텁이 headers 를 안 주면 빈 객체 */
 export async function httpJson(
   url: string,
   init: { method: string; headers?: Record<string, string>; body?: string },
-): Promise<[number, Record<string, unknown>]> {
+): Promise<[number, Record<string, unknown>, Record<string, string>]> {
   const res = await fetch(url, init);
   const text = await res.text();
   let parsed: Record<string, unknown> = {};
@@ -34,23 +36,67 @@ export async function httpJson(
     const value = JSON.parse(text);
     parsed = typeof value === "object" && value !== null ? value : {};
   } catch { /* 빈 본문/비 JSON */ }
-  return [res.status, parsed];
+  const headers: Record<string, string> = {};
+  const h = (res as { headers?: { forEach?: (cb: (v: string, k: string) => void) => void } }).headers;
+  if (h && typeof h.forEach === "function") h.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+  return [res.status, parsed, headers];
 }
 
-/** 호출 간 최소 간격 보장 (모의 서버 레이트리밋 회피). */
+/** 호출 간 최소 간격 보장 (모의 서버 레이트리밋 회피). 0 이면 쓰로틀 없음 */
 export class Throttle {
-  private last = 0;
+  private last: number | null = null;
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly minIntervalMs: number) {}
+  constructor(private readonly minIntervalMs: number, private readonly sleeper: (ms: number) => Promise<void> = sleep,
+              private readonly clock: () => number = Date.now) {}
 
   wait(): Promise<void> {
+    if (this.minIntervalMs <= 0) return Promise.resolve();
     this.chain = this.chain.then(async () => {
-      const delta = this.last + this.minIntervalMs - Date.now();
-      if (delta > 0) await sleep(delta);
-      this.last = Date.now();
+      if (this.last !== null) {
+        const delta = this.last + this.minIntervalMs - this.clock();
+        if (delta > 0) await this.sleeper(delta);
+      }
+      this.last = this.clock();
     });
     return this.chain;
+  }
+}
+
+/**
+ * 어댑터 공용 레이트리밋 부품 — 쓰로틀 + RateLimitError 백오프 재시도.
+ * 재시도가 소진되면 마지막 예외를 그대로 던진다 (엔진은 그때서야 틱을 건너뛴다).
+ * 대기: 서버 Retry-After(retryAfterSeconds)가 있으면 그 값(상한 MAX_RETRY_AFTER_MS), 아니면 backoffMs(attempt)
+ */
+export class RateLimiter {
+  static readonly MAX_RETRY_AFTER_MS = 30_000;
+  readonly throttle: Throttle;
+
+  constructor(
+    minIntervalMs: number,
+    private readonly maxRetries = 3,
+    private readonly backoffMs: (attempt: number) => number = (attempt) => 1000 * attempt,
+    private readonly sleeper: (ms: number) => Promise<void> = sleep,
+    clock: () => number = Date.now,
+  ) {
+    this.throttle = new Throttle(minIntervalMs, sleeper, clock);
+  }
+
+  async execute<T>(fn: () => Promise<T>, label = ""): Promise<T> {
+    for (let attempt = 0; ; ) {
+      await this.throttle.wait();
+      try {
+        return await fn();
+      } catch (e) {
+        if (!(e instanceof RateLimitError) || attempt >= this.maxRetries) throw e;
+        attempt++;
+        const wait = e.retryAfterSeconds !== null
+          ? Math.min(e.retryAfterSeconds * 1000, RateLimiter.MAX_RETRY_AFTER_MS)
+          : this.backoffMs(attempt);
+        console.warn(`WARN hermetix rate limit${label ? `(${label})` : ""} - retry ${attempt}/${this.maxRetries} after ${wait}ms`);
+        await this.sleeper(wait);
+      }
+    }
   }
 }
 

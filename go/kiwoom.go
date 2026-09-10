@@ -8,7 +8,6 @@ package hermetix
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,7 +23,7 @@ type KiwoomClient struct {
 	customBaseURL     bool
 	environment       TradingEnvironment
 	http              *http.Client
-	throttle          *throttle
+	limiter           *rateLimiter
 	tokenMu           sync.Mutex
 	token             string
 	tokenExpires      time.Time
@@ -42,9 +41,15 @@ func NewKiwoomClient(appkey, secretkey string) *KiwoomClient {
 		baseURL:     KiwoomPaperURL,
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
-		throttle:    newThrottle(1100 * time.Millisecond),
+		limiter:     newRateLimiter(1100*time.Millisecond, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 1100 * time.Millisecond }),
 	}
 	c.call = c.request
+	return c
+}
+
+// SetThrottle - 호출 간 최소 간격 직접 지정 (테스트용).
+func (c *KiwoomClient) SetThrottle(interval time.Duration) *KiwoomClient {
+	c.limiter = newRateLimiter(interval, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 1100 * time.Millisecond })
 	return c
 }
 
@@ -382,19 +387,12 @@ func (c *KiwoomClient) balance() (map[string]any, error) {
 }
 
 func (c *KiwoomClient) request(path, apiID string, jsonBody map[string]string) (map[string]any, error) {
-	for attempt := 0; ; attempt++ {
-		body, err := c.requestOnce(path, apiID, jsonBody)
-		var rateLimited *RateLimitError
-		if errors.As(err, &rateLimited) && attempt < 3 {
-			time.Sleep(time.Duration(attempt+1) * 1100 * time.Millisecond) // TR당 유량 제한 백오프
-			continue
-		}
-		return body, err
-	}
+	return c.limiter.execute("키움 "+apiID, func() (map[string]any, error) {
+		return c.requestOnce(path, apiID, jsonBody)
+	})
 }
 
 func (c *KiwoomClient) requestOnce(path, apiID string, jsonBody map[string]string) (map[string]any, error) {
-	c.throttle.wait()
 	token, err := c.getToken()
 	if err != nil {
 		return nil, err
@@ -435,7 +433,7 @@ func (c *KiwoomClient) getToken() (string, error) {
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
-	c.throttle.wait()
+	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]string{
 		"grant_type": "client_credentials", "appkey": c.appkey, "secretkey": c.secretkey,
 	})

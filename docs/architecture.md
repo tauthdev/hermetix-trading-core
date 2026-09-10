@@ -191,7 +191,19 @@ BrokerApiException (기반)
 | 수량/금액 표기 | JSON 문자열 | 문자열 | 부호 접두(가격) / zero-padded(금액) — 어댑터가 정규화 |
 | 응답 정규화 | v1.3 원시 응답(quotes `outcome`, 캔들 `time`, `cashAmount`, `averageBuyPrice`, 캘린더 `status`+`sessions[]`)을 공통 모델로 변환. 등락률·손익률 %→비율, KST 세션 시각→뉴욕 현지 HH:mm, 총평가=예수금+보유 평가금액(보유 조회 1회 추가) | KIS 응답 → 공통 모델 | 키움 응답 → 공통 모델 |
 
-새 어댑터 추가 절차: ① 모의서버 실측(토큰/시세/캔들/잔고/주문/에러 포맷) ② `BrokerClient` 구현 ③ 오토컨피그에 @ConditionalOnProperty 등록 ④ env-gated 실서버 스모크 테스트.
+새 어댑터 추가 절차: ① 모의서버 실측(토큰/시세/캔들/잔고/주문/에러 포맷)으로 `conformance/fixtures/<broker>.json` 작성 ② `BrokerClient` 구현 ③ **컨포먼스 킷 통과** (`BrokerConformance.verify`, 네 언어 공통 시나리오 — [conformance/README.md](../conformance/README.md)) ④ 오토컨피그에 @ConditionalOnProperty 등록 ⑤ env-gated 실서버 스모크 테스트.
+
+### 레이트리밋 공용 부품 (RateLimiter)
+
+어댑터마다 복붙하던 쓰로틀/백오프를 `RateLimiter(minIntervalMillis, maxRetries, backoffMillis)` 하나로 통합했다. `execute { }` 가 호출 간 최소 간격을 보장하고 `RateLimitError` 면 백오프 후 재시도한다. 서버가 `Retry-After` 를 주면(`RateLimitError.retryAfterSeconds`) 그 값을 30초 상한 내에서 따른다. 재시도가 소진되면 마지막 예외를 그대로 던지고, 엔진은 그때서야 틱을 건너뛴다.
+
+| 어댑터 | 최소 간격 | 재시도 | 백오프 |
+|---|---|---|---|
+| next | 없음 | 2회 | `Retry-After` 또는 1s×n |
+| kis | 모의 600ms / 실전 100ms | 3회 | 1s×n (EGW00201) |
+| kiwoom | 1100ms (TR당 초당 1회) | 3회 | 1.1s×n |
+
+Python `RateLimiter`, JS `RateLimiter`, Go `rateLimiter` 가 같은 의미다.
 
 ## 버전/호환 정책
 

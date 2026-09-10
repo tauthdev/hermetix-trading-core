@@ -1,0 +1,35 @@
+{
+  "broker": "kis",
+  "description": "한국투자증권 모의투자 응답 형태 (2026-08 실측 필드). 라우트는 path(토큰) 또는 tr_id 헤더로 매칭",
+  "scenario": { "symbol": "005930", "quantity": "1", "limitPrice": "70000" },
+  "routes": [
+    { "method": "POST", "path": "/oauth2/tokenP",
+      "body": { "access_token": "tok-conformance", "token_type": "Bearer", "expires_in": 86400 } },
+    { "header": ["tr_id", "FHKST01010100"],
+      "body": { "rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다.",
+        "output": { "stck_prpr": "70000", "acml_vol": "12345678", "prdy_vrss": "500", "prdy_ctrt": "0.72" } } },
+    { "header": ["tr_id", "FHKST03010100"],
+      "body": { "rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다.", "output2": [
+        { "stck_bsop_date": "20260910", "stck_oprc": "69500", "stck_hgpr": "70500", "stck_lwpr": "69000", "stck_clpr": "70000", "acml_vol": "12345678" },
+        { "stck_bsop_date": "20260909", "stck_oprc": "69000", "stck_hgpr": "69800", "stck_lwpr": "68500", "stck_clpr": "69500", "acml_vol": "11000000" },
+        { "stck_bsop_date": "20260908", "stck_oprc": "68000", "stck_hgpr": "69200", "stck_lwpr": "67900", "stck_clpr": "69000", "acml_vol": "10500000" } ] } },
+    { "header": ["tr_id", "VTTC8434R"],
+      "body": { "rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다.",
+        "output1": [ { "pdno": "005930", "prdt_name": "삼성전자", "hldg_qty": "3", "pchs_avg_pric": "68000.00", "prpr": "70000",
+                       "evlu_amt": "210000", "evlu_pfls_amt": "6000", "evlu_pfls_rt": "2.94" } ],
+        "output2": [ { "dnca_tot_amt": "1000000", "tot_evlu_amt": "1210000" } ] } },
+    { "header": ["tr_id", "TTTC8434R"],
+      "body": { "rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다.",
+        "output1": [ { "pdno": "005930", "prdt_name": "삼성전자", "hldg_qty": "3", "pchs_avg_pric": "68000.00", "prpr": "70000",
+                       "evlu_amt": "210000", "evlu_pfls_amt": "6000", "evlu_pfls_rt": "2.94" } ],
+        "output2": [ { "dnca_tot_amt": "1000000", "tot_evlu_amt": "1210000" } ] } },
+    { "header": ["tr_id", "VTTC8908R"],
+      "body": { "rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상처리 되었습니다.", "output": { "ord_psbl_cash": "1000000" } } },
+    { "header": ["tr_id", "VTTC0802U"],
+      "body": { "rt_cd": "0", "msg_cd": "APBK0013", "msg1": "주문 전송 완료 되었습니다.", "output": { "KRX_FWDG_ORD_ORGNO": "00950", "ODNO": "0001234", "ORD_TMD": "091500" } } },
+    { "header": ["tr_id", "VTTC0801U"],
+      "body": { "rt_cd": "0", "msg_cd": "APBK0013", "msg1": "주문 전송 완료 되었습니다.", "output": { "KRX_FWDG_ORD_ORGNO": "00950", "ODNO": "0001235", "ORD_TMD": "091500" } } },
+    { "header": ["tr_id", "VTTC0803U"],
+      "body": { "rt_cd": "0", "msg_cd": "APBK0013", "msg1": "주문 전송 완료 되었습니다.", "output": { "KRX_FWDG_ORD_ORGNO": "00950", "ODNO": "0001236", "ORD_TMD": "091600" } } }
+  ]
+}

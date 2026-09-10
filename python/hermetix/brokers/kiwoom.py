@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     TradingEnvironment,
@@ -70,7 +70,8 @@ class KiwoomClient(BrokerClient):
         self._appkey = appkey
         self._secretkey = secretkey
         self._http = _Http(base_url or (self.LIVE_URL if environment == TradingEnvironment.LIVE else self.PAPER_URL))
-        self._throttle = Throttle(throttle_seconds)
+        # TR 당 초당 1회 유량 제한 - 쓰로틀 + 백오프 재시도
+        self._limiter = RateLimiter(throttle_seconds, max_retries=3, backoff=lambda attempt: 1.1 * attempt)
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = threading.Lock()
@@ -239,17 +240,9 @@ class KiwoomClient(BrokerClient):
         return self._call("/api/dostk/acnt", "kt00018", {"qry_tp": "1", "dmst_stex_tp": "KRX"})
 
     def _call(self, path: str, api_id: str, body: dict) -> dict:
-        for attempt in range(4):
-            try:
-                return self._call_once(path, api_id, body)
-            except RateLimitError:
-                if attempt >= 3:
-                    raise
-                time.sleep(1.1 * (attempt + 1))  # TR당 유량 제한 백오프
-        raise AssertionError("unreachable")
+        return self._limiter.execute(lambda: self._call_once(path, api_id, body), f"키움 {api_id}")
 
     def _call_once(self, path: str, api_id: str, body: dict) -> dict:
-        self._throttle.wait()
         status, parsed = self._http.request(
             "POST", path,
             headers={"authorization": f"Bearer {self._get_token()}", "api-id": api_id},
@@ -273,7 +266,7 @@ class KiwoomClient(BrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._throttle.wait()
+            self._limiter.throttle.wait()
             status, body = self._http.request(
                 "POST", "/oauth2/token",
                 json_body={"grant_type": "client_credentials",

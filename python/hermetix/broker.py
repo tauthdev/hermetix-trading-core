@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.error
@@ -77,6 +78,8 @@ class _Http:
     def __init__(self, base_url: str, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # 직전 응답 헤더 (Retry-After 등). 테스트 스텁은 설정하지 않아도 된다
+        self.last_headers: dict[str, str] = {}
 
     def request(
         self,
@@ -105,8 +108,10 @@ class _Http:
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as res:
+                self.last_headers = {k.lower(): v for k, v in res.headers.items()}
                 return res.status, _parse_json(res.read())
         except urllib.error.HTTPError as e:
+            self.last_headers = {k.lower(): v for k, v in (e.headers.items() if e.headers else [])}
             return e.code, _parse_json(e.read())
 
 
@@ -119,19 +124,63 @@ def _parse_json(raw: bytes) -> dict:
 
 
 class Throttle:
-    """호출 간 최소 간격 보장 (모의 서버 레이트리밋 회피)."""
+    """호출 간 최소 간격 보장 (모의 서버 레이트리밋 회피). 0 이면 쓰로틀 없음."""
 
-    def __init__(self, min_interval_seconds: float):
+    def __init__(self, min_interval_seconds: float, sleep=time.sleep, clock=time.monotonic):
         self.min_interval = min_interval_seconds
+        self._sleep = sleep
+        self._clock = clock
         self._lock = threading.Lock()
-        self._last = 0.0
+        self._last: float | None = None
 
     def wait(self) -> None:
+        if self.min_interval <= 0:
+            return
         with self._lock:
-            delta = self._last + self.min_interval - time.monotonic()
-            if delta > 0:
-                time.sleep(delta)
-            self._last = time.monotonic()
+            if self._last is not None:
+                delta = self._last + self.min_interval - self._clock()
+                if delta > 0:
+                    self._sleep(delta)
+            self._last = self._clock()
+
+
+class RateLimiter:
+    """어댑터 공용 레이트리밋 부품 - 쓰로틀 + RateLimitError 백오프 재시도.
+
+    - min_interval_seconds: 호출 간 최소 간격 (0 = 쓰로틀 없음)
+    - max_retries: RateLimitError 재시도 횟수. 소진되면 마지막 예외를 그대로 던진다 - 엔진은 그때서야 틱을 건너뛴다
+    - 대기: 서버 Retry-After(retry_after_seconds)가 있으면 그 값(상한 MAX_RETRY_AFTER), 아니면 backoff(attempt)
+    """
+
+    MAX_RETRY_AFTER = 30.0
+
+    def __init__(self, min_interval_seconds: float, max_retries: int = 3,
+                 backoff=lambda attempt: 1.0 * attempt, sleep=time.sleep, clock=time.monotonic):
+        self.throttle = Throttle(min_interval_seconds, sleep=sleep, clock=clock)
+        self._max_retries = max_retries
+        self._backoff = backoff
+        self._sleep = sleep
+
+    @property
+    def min_interval(self) -> float:
+        return self.throttle.min_interval
+
+    def execute(self, fn, label: str = ""):
+        from .errors import RateLimitError  # 순환 import 회피
+        attempt = 0
+        while True:
+            self.throttle.wait()
+            try:
+                return fn()
+            except RateLimitError as e:
+                if attempt >= self._max_retries:
+                    raise
+                attempt += 1
+                wait = (min(e.retry_after_seconds, self.MAX_RETRY_AFTER) if e.retry_after_seconds is not None
+                        else self._backoff(attempt))
+                logging.getLogger("hermetix").warning("rate limit%s - retry %d/%d after %.1fs",
+                                                      f"({label})" if label else "", attempt, self._max_retries, wait)
+                self._sleep(wait)
 
 
 def krx_calendar(days: int = 31) -> list[MarketDay]:

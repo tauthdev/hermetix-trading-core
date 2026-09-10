@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from ..broker import BrokerClient, _Http
+from ..broker import BrokerClient, RateLimiter, _Http
 from ..errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
     MarketClosedError, OrderNotFoundError, RateLimitError,
@@ -39,6 +39,13 @@ _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 KST = ZoneInfo("Asia/Seoul")
 NEW_YORK = ZoneInfo("America/New_York")
 _MARKET = "US"
+
+
+def _float_or_none(value) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def new_request_id() -> str:
@@ -103,6 +110,8 @@ class NextClient(BrokerClient):
         self._client_secret = client_secret
         self._account_id = account_id
         self._http = _Http(base_url)
+        # 429 는 Retry-After 만큼 기다렸다가 최대 2회 재시도. 쓰로틀은 없다 (초당 한도가 넉넉함)
+        self._limiter = RateLimiter(0, max_retries=2, backoff=lambda attempt: 1.0 * attempt)
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = threading.Lock()
@@ -273,18 +282,22 @@ class NextClient(BrokerClient):
                 headers[ACCOUNT_HEADER] = self._account_id
             status, body = self._http.request(method, path, headers=headers, query=query, json_body=json_body)
             if status < 200 or status >= 300:
-                raise self._map_error(status, body.get("error") or {})
+                retry_after = (getattr(self._http, "last_headers", None) or {}).get("retry-after")
+                raise self._map_error(status, body.get("error") or {}, _float_or_none(retry_after))
             return body
 
-        try:
-            return call()
-        except AuthError:
-            # 토큰 만료 - 1회 재발급 후 재시도
-            self._token = None
-            return call()
+        def with_auth_retry() -> dict:
+            try:
+                return call()
+            except AuthError:
+                # 토큰 만료 - 1회 재발급 후 재시도
+                self._token = None
+                return call()
+
+        return self._limiter.execute(with_auth_retry, "next")
 
     @staticmethod
-    def _map_error(status: int, error: dict) -> BrokerApiError:
+    def _map_error(status: int, error: dict, retry_after_seconds: float | None = None) -> BrokerApiError:
         """v1.3 에러 type ↔ HTTP: validation(400) authentication(401) permission(403) not_found(404)
         conflict(409) business_rule(422) locked(423, 킬스위치 trading-halted) rate_limit(429) server(5xx)"""
         code = error.get("code")
@@ -293,7 +306,7 @@ class NextClient(BrokerClient):
         if status == 401 or error_type == "authentication":
             return AuthError(status, code, message)
         if status == 429:
-            return RateLimitError(status, code, message)
+            return RateLimitError(status, code, message, retry_after_seconds)
         if error_type == "permission":
             # 조회전용 키(insufficient-scope)·계좌 불일치 — 자금 부족으로 오인하지 않는다
             return BrokerApiError(status, code, message)

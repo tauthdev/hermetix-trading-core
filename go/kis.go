@@ -9,7 +9,6 @@ package hermetix
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -31,7 +30,7 @@ type KisClient struct {
 	customBaseURL                       bool
 	environment                         TradingEnvironment
 	http                                *http.Client
-	throttle                            *throttle
+	limiter                             *rateLimiter
 	tokenMu                             sync.Mutex
 	token                               string
 	tokenExpires                        time.Time
@@ -51,7 +50,7 @@ func NewKisClient(appkey, appsecret, cano string) *KisClient {
 		baseURL:     KisPaperURL,
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
-		throttle:    newThrottle(600 * time.Millisecond),
+		limiter:     newRateLimiter(600*time.Millisecond, 3, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second }),
 		tracked:     map[string]kisTracked{},
 	}
 	c.call = c.request
@@ -79,7 +78,13 @@ func (c *KisClient) SetEnvironment(env TradingEnvironment) *KisClient {
 	if env == Live {
 		interval = 100 * time.Millisecond
 	}
-	c.throttle = newThrottle(interval)
+	c.limiter = newRateLimiter(interval, 3, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second })
+	return c
+}
+
+// SetThrottle - 호출 간 최소 간격 직접 지정 (테스트용).
+func (c *KisClient) SetThrottle(interval time.Duration) *KisClient {
+	c.limiter = newRateLimiter(interval, 3, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second })
 	return c
 }
 
@@ -443,19 +448,12 @@ func (c *KisClient) acct() map[string]string {
 }
 
 func (c *KisClient) request(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error) {
-	for attempt := 0; ; attempt++ {
-		body, err := c.requestOnce(method, path, trID, query, jsonBody)
-		var rateLimited *RateLimitError
-		if errors.As(err, &rateLimited) && attempt < 3 {
-			time.Sleep(time.Duration(attempt+1) * time.Second) // 초당 요청 제한 백오프
-			continue
-		}
-		return body, err
-	}
+	return c.limiter.execute("KIS "+trID, func() (map[string]any, error) {
+		return c.requestOnce(method, path, trID, query, jsonBody)
+	})
 }
 
 func (c *KisClient) requestOnce(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error) {
-	c.throttle.wait()
 	token, err := c.getToken()
 	if err != nil {
 		return nil, err
@@ -501,7 +499,7 @@ func (c *KisClient) getToken() (string, error) {
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
-	c.throttle.wait()
+	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]string{
 		"grant_type": "client_credentials", "appkey": c.appkey, "appsecret": c.appsecret,
 	})

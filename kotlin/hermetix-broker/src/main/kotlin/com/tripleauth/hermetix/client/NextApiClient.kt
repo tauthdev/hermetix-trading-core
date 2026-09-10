@@ -10,6 +10,7 @@ import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
+import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
@@ -77,6 +78,7 @@ import java.util.UUID
  *
  * 규약:
  * - 모든 호출은 Bearer 토큰을 자동 첨부하며, 401 발생 시 토큰을 1회 재발급 후 재시도한다
+ * - 429 는 `Retry-After` 만큼 기다렸다가 최대 2회 재시도한다 ([RateLimiter]) — 쓰로틀은 없다 (초당 한도가 넉넉함)
  * - 모든 고객 API 에 `X-Request-Id` 를 붙인다 (토큰 발급 외 전 API 필수 — 누락 시 400 `request-id-required`)
  * - 계좌·자산·주문 API 는 `X-Next-Account-Id` 헤더를 자동으로 붙인다 (구 `X-Nextsecurities-Account` 에서 개명.
  *   토큰의 계좌와 불일치 시 403 `account-mismatch`)
@@ -117,6 +119,8 @@ class NextApiClient(
     private val restClient = RestClient.builder()
         .baseUrl(properties.baseUrl)
         .build()
+
+    private val limiter = RateLimiter(minIntervalMillis = 0, maxRetries = 2, backoffMillis = { attempt -> 1000L * attempt })
 
     // ------------------------------------------------------------------ market
 
@@ -392,7 +396,8 @@ class NextApiClient(
                     objectMapper.readValue(bytes, T::class.java)
                 } else {
                     val error = runCatching { objectMapper.readValue(bytes, ApiErrorEnvelope::class.java).error }.getOrNull()
-                    throw mapError(res.statusCode.value(), error)
+                    val retryAfter = res.headers.getFirst("Retry-After")?.trim()?.toLongOrNull()
+                    throw mapError(res.statusCode.value(), error, retryAfter)
                 }
             }!!
     }
@@ -402,12 +407,12 @@ class NextApiClient(
      * `type` ↔ HTTP: validation(400) · authentication(401) · permission(403) · not_found(404) · conflict(409) ·
      * business_rule(422) · locked(423, 킬스위치 `trading-halted`) · rate_limit(429) · server(5xx)
      */
-    private fun mapError(status: Int, error: ApiError?): BrokerApiException {
+    private fun mapError(status: Int, error: ApiError?, retryAfterSeconds: Long? = null): BrokerApiException {
         val code = error?.code
         val message = "Next(${code}) ${error?.message ?: ""} requestId=${error?.requestId}"
         return when {
             status == 401 || error?.type == "authentication" -> AuthError(status, code, message)
-            status == 429 -> RateLimitError(status, code, message)
+            status == 429 -> RateLimitError(status, code, message, retryAfterSeconds)
             // 조회전용 키·계좌 불일치 — 인증 재시도로 풀리지 않는 권한 문제
             error?.type == "permission" -> BrokerApiException(status, code, message)
             code == "order-not-found" -> OrderNotFoundError(code, message)
@@ -419,9 +424,9 @@ class NextApiClient(
         }
     }
 
-    private fun <T> executeWithRetry(call: (String) -> T): T {
+    private fun <T> executeWithRetry(call: (String) -> T): T = limiter.execute("next") {
         val token = tokenManager.getToken()
-        return try {
+        try {
             call(token)
         } catch (e: AuthError) {
             logger.warn { "auth error(${e.errorCode}) - refreshing token and retrying once" }

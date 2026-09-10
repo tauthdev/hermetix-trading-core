@@ -24,7 +24,8 @@
     broker = KisClient(appkey=..., appsecret=..., cano=...)      # 한국투자 모의
     broker = KiwoomClient(appkey=..., secretkey=...)             # 키움 모의
 """
-from .broker import BrokerClient
+from .broker import BrokerClient, RateLimiter
+from .testing import ConformanceReport, ConformanceScenario, verify_broker_conformance
 from .brokers.kis import KisClient
 from .brokers.kiwoom import KiwoomClient
 from .brokers.next import NextClient
@@ -43,7 +44,8 @@ from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, Stra
 __version__ = "0.2.0"
 
 __all__ = [
-    "BrokerClient", "NextClient", "KisClient", "KiwoomClient",
+    "BrokerClient", "RateLimiter", "NextClient", "KisClient", "KiwoomClient",
+    "ConformanceReport", "ConformanceScenario", "verify_broker_conformance",
     "StrategyEngine", "TradingGuard", "BracketMonitor", "OrderExecutor", "RiskGuard", "MarketCalendar", "pnl_report",
     "TradingEnvironment", "parse_symbol", "symbol_code", "symbols_match",
     "Strategy", "StrategySpec", "StrategyContext", "Signal", "Buy", "Sell", "Cancel",

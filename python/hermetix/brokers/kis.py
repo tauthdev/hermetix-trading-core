@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     TradingEnvironment,
@@ -84,7 +84,9 @@ class KisClient(BrokerClient):
         self._custtype = custtype
         live = environment == TradingEnvironment.LIVE
         self._http = _Http(base_url or (self.LIVE_URL if live else self.PAPER_URL))
-        self._throttle = Throttle(throttle_seconds or (0.1 if live else 0.6))
+        # 초당 요청 제한 - 쓰로틀 + EGW00201 백오프 재시도
+        self._limiter = RateLimiter(throttle_seconds or (0.1 if live else 0.6), max_retries=3,
+                                    backoff=lambda attempt: 1.0 * attempt)
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = threading.Lock()
@@ -278,18 +280,11 @@ class KisClient(BrokerClient):
 
     def _call(self, method: str, path: str, tr_id: str, *, query: dict | None = None,
               body: dict | None = None) -> dict:
-        for attempt in range(4):
-            try:
-                return self._call_once(method, path, tr_id, query=query, body=body)
-            except RateLimitError:
-                if attempt >= 3:
-                    raise
-                time.sleep(1.0 * (attempt + 1))  # 모의 서버 초당 요청 제한 백오프
-        raise AssertionError("unreachable")
+        return self._limiter.execute(
+            lambda: self._call_once(method, path, tr_id, query=query, body=body), f"KIS {tr_id}")
 
     def _call_once(self, method: str, path: str, tr_id: str, *, query: dict | None,
                    body: dict | None) -> dict:
-        self._throttle.wait()
         headers = {
             "authorization": f"Bearer {self._get_token()}",
             "appkey": self._appkey, "appsecret": self._appsecret,
@@ -315,7 +310,7 @@ class KisClient(BrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._throttle.wait()
+            self._limiter.throttle.wait()
             status, body = self._http.request(
                 "POST", "/oauth2/tokenP",
                 json_body={"grant_type": "client_credentials",

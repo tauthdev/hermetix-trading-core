@@ -18,7 +18,12 @@ export class BrokerApiError extends Error {
 }
 
 export class AuthError extends BrokerApiError {}
-export class RateLimitError extends BrokerApiError {}
+/** 레이트리밋 초과 — 어댑터의 자동 재시도(RateLimiter)가 소진된 뒤에만 전파된다. retryAfterSeconds 는 서버 Retry-After */
+export class RateLimitError extends BrokerApiError {
+  constructor(httpStatus: number, errorCode: string | null, message: string, readonly retryAfterSeconds: number | null = null) {
+    super(httpStatus, errorCode, message);
+  }
+}
 export class MarketClosedError extends BrokerApiError {}
 export class InsufficientFundsError extends BrokerApiError {}
 export class InvalidOrderError extends BrokerApiError {}

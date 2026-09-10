@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { Decimal } from "decimal.js";
-import { BrokerClient, D, DorNull, httpJson } from "../broker.js";
+import { BrokerClient, D, DorNull, RateLimiter, httpJson } from "../broker.js";
 import {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
   MarketClosedError, OrderNotFoundError, RateLimitError,
@@ -74,6 +74,8 @@ export class NextClient implements BrokerClient {
 
   private token: string | null = null;
   private tokenExpiresAt = 0;
+  /** 429 는 Retry-After 만큼 기다렸다가 최대 2회 재시도. 쓰로틀은 없다 (초당 한도가 넉넉함) */
+  private readonly limiter = new RateLimiter(0, 2, (attempt) => 1000 * attempt);
 
   constructor(
     private readonly clientId: string,
@@ -253,32 +255,37 @@ export class NextClient implements BrokerClient {
       };
       if (opts.account) headers[NEXT_ACCOUNT_HEADER] = this.accountId;
       if (opts.json) headers["Content-Type"] = "application/json";
-      const [status, body] = await httpJson(this.baseUrl + path, {
+      const [status, body, resHeaders] = await httpJson(this.baseUrl + path, {
         method, headers, body: opts.json ? JSON.stringify(opts.json) : undefined,
       });
-      if (status < 200 || status >= 300) throw this.mapError(status, (body.error ?? {}) as NextError);
+      if (status < 200 || status >= 300) {
+        const retryAfter = Number(resHeaders?.["retry-after"]);
+        throw this.mapError(status, (body.error ?? {}) as NextError, Number.isFinite(retryAfter) ? retryAfter : null);
+      }
       return body;
     };
-    try {
-      return await call();
-    } catch (e) {
-      if (e instanceof AuthError) {
-        this.token = null; // 토큰 만료 - 1회 재발급 후 재시도
-        return call();
+    return this.limiter.execute(async () => {
+      try {
+        return await call();
+      } catch (e) {
+        if (e instanceof AuthError) {
+          this.token = null; // 토큰 만료 - 1회 재발급 후 재시도
+          return call();
+        }
+        throw e;
       }
-      throw e;
-    }
+    }, "next");
   }
 
   /**
    * v1.3 에러 type ↔ HTTP: validation(400) authentication(401) permission(403) not_found(404)
    * conflict(409) business_rule(422) locked(423, 킬스위치 trading-halted) rate_limit(429) server(5xx)
    */
-  private mapError(status: number, error: NextError): BrokerApiError {
+  private mapError(status: number, error: NextError, retryAfterSeconds: number | null = null): BrokerApiError {
     const code = error.code ?? null;
     const message = `Next(${code}) ${error.message ?? ""} requestId=${error.requestId}`;
     if (status === 401 || error.type === "authentication") return new AuthError(status, code, message);
-    if (status === 429) return new RateLimitError(status, code, message);
+    if (status === 429) return new RateLimitError(status, code, message, retryAfterSeconds);
     // 조회전용 키(insufficient-scope)·계좌 불일치 — 자금 부족으로 오인하지 않는다
     if (error.type === "permission") return new BrokerApiError(status, code, message);
     if (code === "order-not-found") return new OrderNotFoundError(code, message);
