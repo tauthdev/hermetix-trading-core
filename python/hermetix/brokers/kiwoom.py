@@ -18,6 +18,7 @@ from decimal import Decimal
 from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
+    TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
     Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote,
 )
@@ -55,13 +56,20 @@ class KiwoomClient(BrokerClient):
         native_bracket=False,
         fractional_shares=False,
         server_open_orders=True,  # ka10075 미체결 조회 제공
+        environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
     )
 
+    PAPER_URL = "https://mockapi.kiwoom.com"
+    LIVE_URL = "https://api.kiwoom.com"
+
     def __init__(self, appkey: str, secretkey: str,
-                 base_url: str = "https://mockapi.kiwoom.com", throttle_seconds: float = 1.1):
+                 base_url: str = "", throttle_seconds: float = 1.1,
+                 environment: TradingEnvironment = TradingEnvironment.PAPER):
+        """base_url 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통."""
+        self.environment = environment
         self._appkey = appkey
         self._secretkey = secretkey
-        self._http = _Http(base_url)
+        self._http = _Http(base_url or (self.LIVE_URL if environment == TradingEnvironment.LIVE else self.PAPER_URL))
         self._throttle = Throttle(throttle_seconds)
         self._token: str | None = None
         self._token_expires_at = 0.0
@@ -72,7 +80,7 @@ class KiwoomClient(BrokerClient):
     def get_quotes(self, symbols: list[str]) -> list[Quote]:
         quotes = []
         for symbol in symbols:
-            node = self._call("/api/dostk/stkinfo", "ka10001", {"stk_cd": symbol})
+            node = self._call("/api/dostk/stkinfo", "ka10001", {"stk_cd": self.capabilities.symbol_code(symbol)})
             rate = _signed_or_none(node.get("flu_rt"))
             quotes.append(Quote(
                 symbol=symbol,
@@ -89,7 +97,7 @@ class KiwoomClient(BrokerClient):
         if interval != CandleInterval.DAY_1:
             raise ValueError("키움 어댑터는 일봉(DAY_1)만 지원합니다")
         rows = self._call("/api/dostk/chart", "ka10081",
-                          {"stk_cd": symbol, "base_dt": datetime.now(KST).strftime("%Y%m%d"),
+                          {"stk_cd": self.capabilities.symbol_code(symbol), "base_dt": datetime.now(KST).strftime("%Y%m%d"),
                            "upd_stkpc_tp": "1"}).get("stk_dt_pole_chart_qry", [])
         candles = [
             Candle(
@@ -147,7 +155,7 @@ class KiwoomClient(BrokerClient):
         is_limit = request.order_type == OrderType.LIMIT
         node = self._call("/api/dostk/ordr", api_id, {
             "dmst_stex_tp": "KRX",
-            "stk_cd": request.symbol,
+            "stk_cd": self.capabilities.symbol_code(request.symbol),
             "ord_qty": str(request.quantity),
             "ord_uv": str(krx_tick_round(request.limit_price)) if is_limit else "",
             "trde_tp": "0" if is_limit else "3",
@@ -156,7 +164,7 @@ class KiwoomClient(BrokerClient):
         return Order(
             order_id=str(node.get("ord_no", "")),
             status=OrderStatus.SUBMITTED,
-            symbol=request.symbol, side=request.side, order_type=request.order_type,
+            symbol=self.capabilities.symbol_code(request.symbol), side=request.side, order_type=request.order_type,
             quantity=request.quantity, limit_price=request.limit_price,
             filled_quantity=Decimal(0), submitted_at=datetime.now(timezone.utc),
         )

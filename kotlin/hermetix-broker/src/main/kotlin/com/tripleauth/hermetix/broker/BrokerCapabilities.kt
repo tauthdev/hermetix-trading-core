@@ -15,7 +15,7 @@ import com.tripleauth.hermetix.client.dto.CandleInterval
 data class BrokerCapabilities(
     /** 어댑터 식별자 — `hermetix.broker` 설정값과 동일 */
     val brokerId: String,
-    /** 거래 시장 (예: "US", "KRX") */
+    /** 기본 거래 시장 (예: "US", "KRX") — 접두 없는 심볼은 이 시장으로 해석한다 */
     val market: String,
     /** 표시 통화 */
     val currency: String,
@@ -33,4 +33,8 @@ data class BrokerCapabilities(
      * 재시작 후 서버에 남아있을 수 있는 미체결 주문은 보이지 않는다.
      */
     val serverOpenOrders: Boolean = true,
+    /** 이 어댑터가 지원하는 거래 환경. 실전(LIVE)은 실측으로 확인한 어댑터만 선언한다 */
+    val environments: Set<TradingEnvironment> = setOf(TradingEnvironment.PAPER),
+    /** 한 계좌로 다룰 수 있는 시장 목록 (`MARKET:CODE` 심볼 접두의 허용 값). 기본은 [market] 하나 */
+    val markets: Set<String> = setOf(market),
 )

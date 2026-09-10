@@ -37,7 +37,8 @@ Hermetix 는 **국내외 증권사 모의투자 API** 를 하나의 인터페이
 - **브로커 독립 전략** — 같은 전략 코드가 넥스트증권(미국)과 한국투자·키움(KRX)에서 그대로 돕니다
 - **전략 = 클래스 하나** — 인증, 시세/계좌 조회, 주문 실행, 체결 추적은 전부 코어가 처리합니다
 - **소프트웨어 브라켓** — `Signal.Buy(takeProfitPrice=…, stopLossPrice=…)` 한 줄로 익절/손절 자동화
-- **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단)
+- **안전 우선** — 매도 수량 자동 클램프(공매도 방지), 주문 멱등키, 연속 실패 시 비상정지(미체결 전량 취소 + 주문 차단), 주문 금액 상한
+- **모의 → 실전 전환은 설정 한 줄** — `environment: live` 와 명시 동의(`hermetix.live.enabled`)가 있어야만 실전 주문이 나갑니다. 키는 항상 당신의 기기에서만 쓰입니다
 - **레이트리밋 내장** — 증권사별 요청 제한을 어댑터가 쓰로틀/백오프로 흡수합니다
 - **KRX 호가단위 자동 보정** — 계산된 지정가를 KRX 가격대별 호가단위(1원~1,000원)에 맞게 어댑터가 보정합니다
 - **수익률 기본 제공** — `GET /pnl` 엔드포인트와 주기 PnL 로그가 모든 봇에 자동 포함됩니다
@@ -66,10 +67,10 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (연결 계층이 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.5.6")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.6.0")
 
     // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.5.6")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.6.0")
 }
 ```
 
@@ -136,6 +137,30 @@ hermetix:
 #    appkey: ${KIWOOM_APPKEY:}
 #    secretkey: ${KIWOOM_SECRETKEY:}
 ```
+
+## 실전투자로 전환
+
+모의투자에서 검증한 봇을 실제 계좌로 옮길 때는 두 가지를 명시해야 합니다. 하나라도 빠지면 엔진이 기동을 거부합니다.
+
+```yaml
+hermetix:
+  broker: kis
+  kis:
+    environment: live          # paper(기본) | live — 호스트·TR ID 가 자동으로 바뀝니다
+    appkey: ${KIS_APPKEY:}
+    appsecret: ${KIS_APPSECRET:}
+    cano: ${KIS_CANO:}
+  live:
+    enabled: true              # 실전 명시 동의. 없으면 "LIVE 설정됨 - 기동하지 않음" 으로 멈춥니다
+  risk:
+    max-order-value: 1000000   # 주문 1건 상한 (브로커 통화). 넘는 시그널은 제출하지 않습니다
+    max-daily-order-value: 5000000   # 하루(UTC) 누적 상한 — 매수·매도 합산
+```
+
+- 넥스트증권은 키 프리픽스가 환경을 결정합니다 (`pk_test_`=모의, `pk_live_`=실전). `environment` 와 키가 어긋나면 기동 시 실패합니다
+- 주문 금액 상한은 모의투자에서도 설정하면 적용됩니다. 현재가를 알 수 없는 종목의 주문은 상한이 설정된 경우 거부됩니다
+- 심볼에 시장 접두를 붙일 수 있습니다 (`KRX:005930`, `US:AAPL`). 접두 없는 심볼은 브로커 기본 시장으로 해석되므로 기존 전략은 그대로 동작합니다
+- **키는 절대 Hermetix 가 운영하는 어떤 서버로도 전송되지 않습니다.** 라이브러리가 당신의 기기에서 증권사를 직접 호출합니다
 
 ## 빠른 시작 — 연결 계층만
 

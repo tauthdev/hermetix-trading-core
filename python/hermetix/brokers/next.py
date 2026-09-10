@@ -29,7 +29,7 @@ from ..errors import (
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
     Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote,
-    SessionHours,
+    SessionHours, TradingEnvironment,
 )
 
 ACCOUNT_HEADER = "X-Next-Account-Id"
@@ -87,10 +87,18 @@ class NextClient(BrokerClient):
         native_bracket=False,  # 서버 /v2/orders/advanced(BRACKET) 연동 전까지 소프트웨어 브라켓
         fractional_shares=False,  # v1.3 주문 수량은 정수만
         server_open_orders=True,
+        environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),  # 키 프리픽스로 결정
     )
 
     def __init__(self, client_id: str, client_secret: str, account_id: str = "acc_main",
-                 base_url: str = "https://openapi.nextsecurities.dev"):
+                 base_url: str = "https://openapi.nextsecurities.dev",
+                 environment: TradingEnvironment = TradingEnvironment.PAPER):
+        # 환경은 키 프리픽스가 결정한다 (pk_test_=모의, pk_live_=실전) — 설정과 어긋나면 기동 실패
+        expected = "pk_live_" if environment == TradingEnvironment.LIVE else "pk_test_"
+        if client_id.startswith("pk_") and not client_id.startswith(expected):
+            raise ValueError(f"environment={environment.value} 인데 client_id 가 '{expected}' 로 시작하지 않습니다 "
+                             "(모의=pk_test_, 실전=pk_live_). 키와 환경 설정을 맞추세요.")
+        self.environment = environment
         self._client_id = client_id
         self._client_secret = client_secret
         self._account_id = account_id
@@ -102,14 +110,15 @@ class NextClient(BrokerClient):
     # ------------------------------------------------------------------ market
 
     def get_quotes(self, symbols: list[str]) -> list[Quote]:
-        body = self._get("/v1/market/quotes", query={"symbols": ",".join(symbols)})
+        requested = {self.capabilities.symbol_code(s): s for s in symbols}
+        body = self._get("/v1/market/quotes", query={"symbols": ",".join(requested)})
         quotes = []
         for q in body.get("quotes", []):
             # NOT_FOUND / NO_DATA 는 개별 종목의 정상 결과 — 가격이 없으므로 제외한다 (ctx.quote() 가 None)
             if q.get("outcome") != "OK" or q.get("price") is None:
                 continue
             quotes.append(Quote(
-                symbol=q["symbol"],
+                symbol=requested.get(q["symbol"], q["symbol"]),  # 요청받은 표기(시장 접두 포함)로
                 price=_d(q["price"]),
                 bid_price=_d(q.get("bidPrice")),
                 ask_price=_d(q.get("askPrice")),
@@ -121,7 +130,7 @@ class NextClient(BrokerClient):
         return quotes
 
     def get_candles(self, symbol: str, interval: CandleInterval, limit: int | None = None) -> list[Candle]:
-        query = {"symbol": symbol, "interval": interval.value}
+        query = {"symbol": self.capabilities.symbol_code(symbol), "interval": interval.value}
         if limit is not None:
             query["limit"] = str(limit)
         body = self._get("/v1/market/candles", query=query)
@@ -193,7 +202,7 @@ class NextClient(BrokerClient):
             # v1.3: clientOrderId(멱등키)·market 필수 — 호출자가 안 주면 어댑터가 UUID 를 만든다
             "clientOrderId": request.client_order_id or str(uuid.uuid4()),
             "market": _MARKET,
-            "symbol": request.symbol,
+            "symbol": self.capabilities.symbol_code(request.symbol),
             "side": request.side.value,
             "orderType": request.order_type.value,
             "quantity": str(request.quantity),

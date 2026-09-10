@@ -2,9 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BrokerClient } from "../src/broker.js";
-import { BracketMonitor, OrderExecutor, TradingGuard } from "../src/engine.js";
+import { BracketMonitor, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard } from "../src/engine.js";
 import { Decimal } from "../src/models.js";
-import type { CreateOrderRequest, Order, OrderStatus } from "../src/models.js";
+import type { CreateOrderRequest, Order, OrderStatus, TradingEnvironment } from "../src/models.js";
 import { StrategyContext, buy, sell } from "../src/strategy.js";
 
 class FakeBroker implements BrokerClient {
@@ -12,7 +12,9 @@ class FakeBroker implements BrokerClient {
     brokerId: "fake", market: "US" as const, currency: "USD",
     candleIntervals: new Set(["1d" as const]),
     clientOrderId: true, nativeBracket: false, fractionalShares: false, serverOpenOrders: true,
+    environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
   };
+  environment: TradingEnvironment = "PAPER";
   created: CreateOrderRequest[] = [];
   canceled: string[] = [];
   orderStatus: OrderStatus = "SUBMITTED";
@@ -110,4 +112,62 @@ test("연속 실패 시 비상정지 + 미체결 취소", async () => {
   for (let i = 0; i < 3; i++) await guard.recordFailure(new Error("boom"));
   assert.ok(guard.isHalted);
   assert.deepEqual(broker.canceled, ["ord_9"]);
+});
+
+
+// ------------------------------------------------------------- 0.6.0: 위험 상한 · 실전 게이트 · 심볼 접두
+
+test("RiskGuard: 1건/일일 상한, 가격 미상 거부, UTC 일자 변경 시 초기화", () => {
+  const guard = new RiskGuard(new Decimal(1000));
+  assert.ok(guard.tryReserve("AAPL", new Decimal(2), new Decimal(600)));
+  assert.equal(guard.tryReserve("AAPL", new Decimal(1), new Decimal(600)), null);
+  assert.ok(guard.tryReserve("AAPL", new Decimal(1), null));
+  assert.equal(new RiskGuard().tryReserve("AAPL", new Decimal(1), null), null);
+
+  let now = new Date("2026-09-10T23:00:00Z");
+  const daily = new RiskGuard(null, new Decimal(1000), () => now);
+  assert.equal(daily.tryReserve("AAPL", new Decimal(3), new Decimal(300)), null);
+  assert.ok(daily.tryReserve("AAPL", new Decimal(1), new Decimal(300)));
+  now = new Date("2026-09-11T01:00:00Z");
+  assert.equal(daily.tryReserve("AAPL", new Decimal(1), new Decimal(300)), null);
+  assert.equal(daily.getDailyTotal().toString(), "300");
+});
+
+test("실행기는 금액 상한을 넘는 시그널을 제출하지 않는다", async () => {
+  const broker = new FakeBroker();
+  const executor = new OrderExecutor(broker, new BracketMonitor(broker), new TradingGuard(broker), new RiskGuard(new Decimal(1000)));
+  await executor.execute("t", [
+    buy("AAPL", new Decimal(5)),
+    buy("AAPL", new Decimal(3)),
+    buy("AAPL", new Decimal(10), { orderType: "LIMIT", limitPrice: new Decimal(50) }),
+    buy("NOPE", new Decimal(1)),
+  ], ctx({ price: "300" }));
+  assert.deepEqual(broker.created.map((r) => r.quantity.toString()), ["3", "10"]);
+});
+
+test("실전 게이트: LIVE 는 liveTradingEnabled 없이는 스케줄되지 않는다", () => {
+  const noop = { spec: { name: "t", symbols: ["AAPL"] }, decide: () => [] };
+  const broker = new FakeBroker();
+  broker.environment = "LIVE";
+  assert.equal(new StrategyEngine(broker, [noop]).strategies.length, 0);
+  assert.equal(new StrategyEngine(broker, [noop], 5, { liveTradingEnabled: true }).strategies.length, 1);
+  broker.environment = "PAPER";
+  assert.equal(new StrategyEngine(broker, [noop]).strategies.length, 1);
+});
+
+test("컨텍스트 조회는 시장 접두 유무를 무시한다", () => {
+  const c = new StrategyContext(
+    new Date(),
+    new Map([["KRX:005930", { symbol: "KRX:005930", price: new Decimal(70000), bidPrice: null, askPrice: null, volume: 0, change: null, changeRate: null, timestamp: new Date() }]]),
+    new Map(),
+    { accountId: "a", currency: "KRW", cash: new Decimal(1), portfolioValue: new Decimal(1), status: "ACTIVE" },
+    new Map([["005930", { symbol: "005930", quantity: new Decimal(3), avgEntryPrice: new Decimal(1) }]]),
+    [{ orderId: "o1", status: "SUBMITTED", symbol: "005930" }],
+    new Decimal(1),
+  );
+  assert.equal(c.quote("005930")!.price.toString(), "70000");
+  assert.equal(c.holding("KRX:005930")!.quantity.toString(), "3");
+  assert.equal(c.hasPosition("KRX:005930"), true);
+  assert.equal(c.hasOpenOrder("KRX:005930"), true);
+  assert.equal(c.quote("AAPL"), undefined);
 });

@@ -237,3 +237,38 @@ test("krx 호가단위 보정", () => {
   assert.equal(krxTickRound(new Decimal("197650")).toString(), "197600");    // 5만~20만: 100원
   assert.equal(krxTickRound(new Decimal("1999")).toString(), "1999");        // ~2천: 1원
 });
+
+
+// ------------------------------------------------------------- 0.6.0: 환경 · 심볼 접두
+
+test("next: 환경과 키 프리픽스가 어긋나면 생성 실패", () => {
+  assert.throws(() => new NextClient("pk_test_x", "s", "acc", "http://x", "LIVE"), /pk_live_/);
+  assert.throws(() => new NextClient("pk_live_x", "s", "acc", "http://x", "PAPER"), /pk_test_/);
+  assert.equal(new NextClient("pk_live_x", "s", "acc", "http://x", "LIVE").environment, "LIVE");
+  assert.equal(new NextClient("k", "s").environment, "PAPER");
+});
+
+test("next: 시장 접두 심볼은 코드만 보내고 요청 표기로 돌려준다", async () => {
+  const client = new NextClient("k", "s");
+  let seenPath = "";
+  (client as any).request = async (_m: string, path: string) => {
+    seenPath = path;
+    return { quotes: [{ symbol: "AAPL", outcome: "OK", price: "1", requestedAt: "2026-09-10T23:10:00+09:00" }] };
+  };
+  const [q] = await client.getQuotes(["US:AAPL"]);
+  assert.equal(q.symbol, "US:AAPL");
+  assert.equal(seenPath, "/v1/market/quotes?symbols=AAPL");
+  await assert.rejects(client.getQuotes(["KRX:005930"]), /KRX/);
+});
+
+test("kis/kiwoom: 환경별 호스트·TR 프리픽스", () => {
+  const paper = new KisClient("k", "s", "50199202");
+  const live = new KisClient("k", "s", "50199202", "01", "", 0, "LIVE");
+  assert.equal(paper.baseUrl, KisClient.PAPER_URL);
+  assert.equal(live.baseUrl, KisClient.LIVE_URL);
+  assert.equal(paper.tr("TTC0802U"), "VTTC0802U");
+  assert.equal(live.tr("TTC0802U"), "TTTC0802U");
+  assert.equal(new KisClient("k", "s", "c", "01", "http://custom").baseUrl, "http://custom");
+  assert.equal(new KiwoomClient("k", "s", "", 1100, "LIVE").baseUrl, KiwoomClient.LIVE_URL);
+  assert.equal(new KiwoomClient("k", "s").baseUrl, KiwoomClient.PAPER_URL);
+});

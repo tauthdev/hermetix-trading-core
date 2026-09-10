@@ -17,6 +17,9 @@
 - [x] `hermetix-broker` / `hermetix-engine` 모듈 분리 — 봇 없이 연결 계층만 쓰는 사용자(시세 수집, 대시보드, 알림) 지원
 - [x] `BrokerCapabilities` 선언 — 캔들 주기, clientOrderId, 네이티브 브라켓 등을 코드로 선언하고 엔진이 적응. 기동 시 전략-브로커 호환성 검증 (fail-fast)
 - [x] 에러 체계 통일 — `RateLimitError`(자동 백오프) / `MarketClosedError`(조용히 스킵, 비상정지 카운트 제외) / `InsufficientFundsError` / `InvalidOrderError` / `AuthError` / `OrderNotFoundError`
+- [x] (0.6.0) 거래 환경 `paper | live` — 어댑터가 호스트·TR ID 를 고르고, LIVE 는 `hermetix.live.enabled` 명시 동의 없이는 기동 거부
+- [x] (0.6.0) 주문 금액 상한 `RiskGuard` — 1건 / 일일 누적
+- [x] (0.6.0) `MARKET:CODE` 심볼 접두 — 다중 시장 브로커 대비, 기존 전략 무변경
 
 ## Phase B — 커뮤니티 성장 엔진
 
@@ -37,9 +40,10 @@
 - [ ] 웹소켓 스트리밍 추상화 (next/KIS/키움 모두 WS 제공)
 - [ ] 이벤트 기반 틱 — 폴링 대신 체결가 스트림으로 전략 트리거 (스캘핑류 품질 향상)
 
-## Phase E — 도달 범위 확장 (장기)
+## Phase E — 다언어 도달 (진행 중)
 
-- [ ] `hermetix-server` — 코어를 데몬으로 띄워 통일 REST/WS 게이트웨이 노출 (파이썬/JS 사용자 지원, 트랜스파일 없이 다언어 도달)
+- [x] Python / JavaScript·TypeScript / Go 네이티브 포팅 — Kotlin 레퍼런스를 언어별로 손 포팅하고 같은 골든 픽스처로 동작 일치를 보증한다
+- 원칙: **증권사 키는 항상 사용자 기기에서만 쓰인다.** Hermetix 가 운영하는 서버로 키를 받아 대신 호출하는 구조(게이트웨이/데몬 호스팅)는 한국 금융 라이선스 문제로 채택하지 않는다. 다언어 지원은 ccxt 처럼 각 언어의 로컬 라이브러리로만 제공한다
 
 ---
 

@@ -13,7 +13,9 @@ import { AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateL
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
   Fill, Holding, MarketDay, Order, Quote,
+  TradingEnvironment,
 } from "../models.js";
+import { symbolCodeFor } from "../models.js";
 
 /** 등락 부호 접두 필드 파싱 - 부호 유지. */
 const signed = (v: unknown, fallback = "0"): Decimal => {
@@ -35,18 +37,26 @@ export class KiwoomClient implements BrokerClient {
     nativeBracket: false,
     fractionalShares: false,
     serverOpenOrders: true, // ka10075 미체결 조회 제공
+    environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
   };
 
   private token: string | null = null;
   private tokenExpiresAt = 0;
   private readonly throttle: Throttle;
 
+  static readonly PAPER_URL = "https://mockapi.kiwoom.com";
+  static readonly LIVE_URL = "https://api.kiwoom.com";
+  readonly baseUrl: string;
+
+  /** baseUrl 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통 */
   constructor(
     private readonly appkey: string,
     private readonly secretkey: string,
-    private readonly baseUrl: string = "https://mockapi.kiwoom.com",
+    baseUrl: string = "",
     throttleMs = 1100,
+    readonly environment: TradingEnvironment = "PAPER",
   ) {
+    this.baseUrl = baseUrl || (environment === "LIVE" ? KiwoomClient.LIVE_URL : KiwoomClient.PAPER_URL);
     this.throttle = new Throttle(throttleMs);
   }
 
@@ -55,7 +65,7 @@ export class KiwoomClient implements BrokerClient {
   async getQuotes(symbols: string[]): Promise<Quote[]> {
     const quotes: Quote[] = [];
     for (const symbol of symbols) {
-      const node = await this.call("/api/dostk/stkinfo", "ka10001", { stk_cd: symbol });
+      const node = await this.call("/api/dostk/stkinfo", "ka10001", { stk_cd: symbolCodeFor(this.capabilities, symbol) });
       const rate = signedOrNull(node.flu_rt);
       quotes.push({
         symbol,
@@ -73,7 +83,7 @@ export class KiwoomClient implements BrokerClient {
   async getCandles(symbol: string, interval: CandleInterval, limit?: number): Promise<Candle[]> {
     if (interval !== "1d") throw new Error("키움 어댑터는 일봉(1d)만 지원합니다");
     const body = await this.call("/api/dostk/chart", "ka10081",
-      { stk_cd: symbol, base_dt: kstYyyymmdd(), upd_stkpc_tp: "1" });
+      { stk_cd: symbolCodeFor(this.capabilities, symbol), base_dt: kstYyyymmdd(), upd_stkpc_tp: "1" });
     const candles = ((body.stk_dt_pole_chart_qry ?? []) as Record<string, unknown>[])
       .filter((r) => r.dt)
       .map((r) => ({
@@ -131,7 +141,7 @@ export class KiwoomClient implements BrokerClient {
     const isLimit = request.orderType === "LIMIT";
     const node = await this.call("/api/dostk/ordr", apiId, {
       dmst_stex_tp: "KRX",
-      stk_cd: request.symbol,
+      stk_cd: symbolCodeFor(this.capabilities, request.symbol),
       ord_qty: request.quantity.toString(),
       ord_uv: isLimit ? krxTickRound(request.limitPrice!).toString() : "",
       trde_tp: isLimit ? "0" : "3",
@@ -140,7 +150,7 @@ export class KiwoomClient implements BrokerClient {
     return {
       orderId: String(node.ord_no ?? ""),
       status: "SUBMITTED",
-      symbol: request.symbol, side: request.side, orderType: request.orderType,
+      symbol: symbolCodeFor(this.capabilities, request.symbol), side: request.side, orderType: request.orderType,
       quantity: request.quantity, limitPrice: request.limitPrice ?? null,
       filledQuantity: new Decimal(0), submittedAt: new Date(),
     };

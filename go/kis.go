@@ -28,6 +28,8 @@ type kisTracked struct {
 type KisClient struct {
 	appkey, appsecret, cano, acntPrdtCd string
 	baseURL                             string
+	customBaseURL                       bool
+	environment                         TradingEnvironment
 	http                                *http.Client
 	throttle                            *throttle
 	tokenMu                             sync.Mutex
@@ -38,16 +40,60 @@ type KisClient struct {
 	call                                func(method, path, trID string, query, jsonBody map[string]string) (map[string]any, error)
 }
 
+const (
+	KisPaperURL = "https://openapivts.koreainvestment.com:29443"
+	KisLiveURL  = "https://openapi.koreainvestment.com:9443"
+)
+
 func NewKisClient(appkey, appsecret, cano string) *KisClient {
 	c := &KisClient{
 		appkey: appkey, appsecret: appsecret, cano: cano, acntPrdtCd: "01",
-		baseURL:  "https://openapivts.koreainvestment.com:29443",
-		http:     &http.Client{Timeout: 30 * time.Second},
-		throttle: newThrottle(600 * time.Millisecond),
-		tracked:  map[string]kisTracked{},
+		baseURL:     KisPaperURL,
+		environment: Paper,
+		http:        &http.Client{Timeout: 30 * time.Second},
+		throttle:    newThrottle(600 * time.Millisecond),
+		tracked:     map[string]kisTracked{},
 	}
 	c.call = c.request
 	return c
+}
+
+// SetBaseURL - 호스트를 직접 지정 (환경 자동 결정 무시).
+func (c *KisClient) SetBaseURL(baseURL string) *KisClient {
+	c.baseURL = baseURL
+	c.customBaseURL = true
+	return c
+}
+
+// SetEnvironment - 거래 환경 지정. 호스트(모의 openapivts:29443 / 실전 openapi:9443), 쓰로틀(모의 600ms / 실전 100ms),
+// 계좌 TR ID 프리픽스(모의 V / 실전 T)가 이에 따라 결정된다.
+func (c *KisClient) SetEnvironment(env TradingEnvironment) *KisClient {
+	c.environment = env
+	if !c.customBaseURL {
+		c.baseURL = KisPaperURL
+		if env == Live {
+			c.baseURL = KisLiveURL
+		}
+	}
+	interval := 600 * time.Millisecond
+	if env == Live {
+		interval = 100 * time.Millisecond
+	}
+	c.throttle = newThrottle(interval)
+	return c
+}
+
+func (c *KisClient) Environment() TradingEnvironment { return c.environment }
+
+// BaseURL - 현재 적용된 호스트.
+func (c *KisClient) BaseURL() string { return c.baseURL }
+
+// tr - 계좌 TR ID: 모의 V, 실전 T 프리픽스 (예: tr("TTC0802U") → VTTC0802U / TTTC0802U).
+func (c *KisClient) tr(suffix string) string {
+	if c.environment == Live {
+		return "T" + suffix
+	}
+	return "V" + suffix
 }
 
 func (c *KisClient) Capabilities() BrokerCapabilities {
@@ -58,6 +104,7 @@ func (c *KisClient) Capabilities() BrokerCapabilities {
 		NativeBracket:    false,
 		FractionalShares: false,
 		ServerOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
+		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true},
 	}
 }
 
@@ -67,7 +114,7 @@ func (c *KisClient) GetQuotes(symbols []string) ([]Quote, error) {
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
 		body, err := c.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
-			map[string]string{"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol}, nil)
+			map[string]string{"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": SymbolCode(symbol)}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +144,7 @@ func (c *KisClient) GetCandles(symbol string, interval CandleInterval, limit int
 	start := today.AddDate(0, 0, -(limit*16/10 + 10)) // 휴장일 감안 여유 조회
 	body, err := c.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
 		map[string]string{
-			"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol,
+			"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": SymbolCode(symbol),
 			"FID_INPUT_DATE_1": start.Format("20060102"), "FID_INPUT_DATE_2": today.Format("20060102"),
 			"FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0",
 		}, nil)
@@ -185,7 +232,7 @@ func (c *KisClient) GetBuyingPower() (decimal.Decimal, error) {
 	query["ORD_DVSN"] = "01"
 	query["CMA_EVLU_AMT_ICLD_YN"] = "N"
 	query["OVRS_ICLD_YN"] = "N"
-	body, err := c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R", query, nil)
+	body, err := c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", c.tr("TTC8908R"), query, nil)
 	if err != nil {
 		return decimal.Zero, err
 	}
@@ -195,9 +242,9 @@ func (c *KisClient) GetBuyingPower() (decimal.Decimal, error) {
 // ------------------------------------------------------------------- orders
 
 func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
-	trID := "VTTC0801U"
+	trID := c.tr("TTC0801U")
 	if request.Side == Buy {
-		trID = "VTTC0802U"
+		trID = c.tr("TTC0802U")
 	}
 	isLimit := request.OrderType == Limit
 	price := "0"
@@ -209,7 +256,11 @@ func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 		ordDvsn = "00"
 	}
 	payload := c.acct()
-	payload["PDNO"] = request.Symbol
+	code, err := c.Capabilities().SymbolCode(request.Symbol)
+	if err != nil {
+		return Order{}, err
+	}
+	payload["PDNO"] = code
 	payload["ORD_DVSN"] = ordDvsn
 	payload["ORD_QTY"] = request.Quantity.String()
 	payload["ORD_UNPR"] = price
@@ -226,7 +277,7 @@ func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	zero := decimal.Zero
 	order := Order{
 		OrderID: str(obj(body, "output")["ODNO"]), Status: Submitted,
-		Symbol: request.Symbol, Side: request.Side, OrderType: request.OrderType,
+		Symbol: code, Side: request.Side, OrderType: request.OrderType, // 보유/추적과 같은 단일 시장 표기
 		Quantity: &request.Quantity, LimitPrice: request.LimitPrice,
 		FilledQuantity: &zero, SubmittedAt: &now,
 	}
@@ -274,7 +325,7 @@ func (c *KisClient) CancelOrder(orderID string) (Order, error) {
 	payload["ORD_QTY"] = "0"
 	payload["ORD_UNPR"] = "0"
 	payload["QTY_ALL_ORD_YN"] = "Y"
-	if _, err := c.call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U", nil, payload); err != nil {
+	if _, err := c.call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", c.tr("TTC0803U"), nil, payload); err != nil {
 		return Order{}, err
 	}
 	now := time.Now()
@@ -384,7 +435,7 @@ func (c *KisClient) balance() (map[string]any, error) {
 	} {
 		query[k] = v
 	}
-	return c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", "VTTC8434R", query, nil)
+	return c.call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", c.tr("TTC8434R"), query, nil)
 }
 
 func (c *KisClient) acct() map[string]string {
@@ -414,7 +465,7 @@ func (c *KisClient) requestOnce(method, path, trID string, query, jsonBody map[s
 		rawURL += "?" + encodeQuery(query)
 	}
 	headers := map[string]string{
-		"Content-Type": "application/json; charset=utf-8",
+		"Content-Type":  "application/json; charset=utf-8",
 		"authorization": "Bearer " + token,
 		"appkey":        c.appkey, "appsecret": c.appsecret,
 		"tr_id": trID, "custtype": "P",

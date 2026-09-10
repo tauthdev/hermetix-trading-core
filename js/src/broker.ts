@@ -2,11 +2,13 @@
 import { Decimal } from "decimal.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, Quote,
+  Fill, Holding, MarketDay, Order, Quote, TradingEnvironment,
 } from "./models.js";
 
 export interface BrokerClient {
   readonly capabilities: BrokerCapabilities;
+  /** 이 인스턴스가 연결된 거래 환경. 생략 시 PAPER. 엔진은 LIVE 면 명시 동의(liveTradingEnabled)를 요구한다 */
+  readonly environment?: TradingEnvironment;
   getQuotes(symbols: string[]): Promise<Quote[]>;
   getCandles(symbol: string, interval: CandleInterval, limit?: number): Promise<Candle[]>;
   getCalendar(): Promise<MarketDay[]>;

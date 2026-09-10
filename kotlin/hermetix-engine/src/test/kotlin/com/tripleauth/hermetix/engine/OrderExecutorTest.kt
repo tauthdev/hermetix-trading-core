@@ -31,6 +31,28 @@ class OrderExecutorTest {
     private val executor = OrderExecutor(brokerClient, bracketMonitor, tradingGuard)
 
     @Test
+    fun `주문 금액 상한을 넘는 시그널은 제출하지 않는다`() {
+        every { tradingGuard.isHalted } returns false
+        val captured = mutableListOf<CreateOrderRequest>()
+        every { brokerClient.createOrder(capture(captured)) } returns OrderResponse(orderId = "ord_1", status = OrderStatus.SUBMITTED)
+        val limited = OrderExecutor(brokerClient, bracketMonitor, tradingGuard, RiskGuard(maxOrderValue = BigDecimal("1000")))
+
+        val context = Fixtures.context(quotes = mapOf("AAPL" to Fixtures.quote(price = "300")))
+        limited.execute(
+            "test",
+            listOf(
+                Signal.Buy(symbol = "AAPL", quantity = BigDecimal("5")),                                   // 1500 — 거부
+                Signal.Buy(symbol = "AAPL", quantity = BigDecimal("3")),                                   // 900 — 통과
+                Signal.Buy(symbol = "AAPL", quantity = BigDecimal("10"), orderType = com.tripleauth.hermetix.client.dto.OrderType.LIMIT, limitPrice = BigDecimal("50")), // 500 — 지정가 기준 통과
+                Signal.Buy(symbol = "NOPE", quantity = BigDecimal("1")),                                   // 현재가 없음 — 거부
+            ),
+            context,
+        )
+
+        assertThat(captured.map { it.quantity }).containsExactly(BigDecimal("3"), BigDecimal("10"))
+    }
+
+    @Test
     fun `매도는 보유 수량으로 클램프된다`() {
         every { tradingGuard.isHalted } returns false
         val captured = slot<CreateOrderRequest>()

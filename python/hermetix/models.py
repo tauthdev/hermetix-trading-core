@@ -7,7 +7,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+import re
 from enum import Enum
+
+
+class TradingEnvironment(Enum):
+    """거래 환경. PAPER=모의투자(기본), LIVE=실전투자 — 엔진은 live_trading_enabled=True 없이는 LIVE 를 기동하지 않는다.
+    키는 항상 사용자 기기에서만 쓰인다."""
+    PAPER = "PAPER"
+    LIVE = "LIVE"
+
+
+_MARKET_PREFIX = re.compile(r"^([A-Z]{2,6}):(.+)$")
+
+
+def parse_symbol(symbol: str) -> tuple[str | None, str]:
+    """`MARKET:CODE` 표기를 (market, code) 로 나눈다. 접두가 없으면 (None, symbol)."""
+    m = _MARKET_PREFIX.match(symbol)
+    return (m.group(1), m.group(2)) if m else (None, symbol)
+
+
+def symbol_code(symbol: str) -> str:
+    """접두를 뗀 브로커 심볼 코드"""
+    return parse_symbol(symbol)[1]
+
+
+def symbols_match(a: str, b: str) -> bool:
+    """코드가 같고, 둘 다 시장을 명시했다면 시장도 같아야 한다"""
+    ma, ca = parse_symbol(a)
+    mb, cb = parse_symbol(b)
+    return ca == cb and (ma is None or mb is None or ma == mb)
 
 
 class CandleInterval(Enum):
@@ -150,10 +179,25 @@ class Fill:
 class BrokerCapabilities:
     """브로커가 지원하는 기능의 코드 선언. 실측으로 확인한 것만 True 로 선언한다."""
     broker_id: str
-    market: str          # "US" | "KRX"
+    market: str          # 기본 시장 "US" | "KRX" — 접두 없는 심볼은 이 시장으로 해석
     currency: str
     candle_intervals: frozenset[CandleInterval]
     client_order_id: bool
     native_bracket: bool
     fractional_shares: bool
     server_open_orders: bool = True
+    # 지원 거래 환경. 실전(LIVE)은 실측으로 확인한 어댑터만 선언
+    environments: frozenset[TradingEnvironment] = frozenset({TradingEnvironment.PAPER})
+    # 한 계좌로 다룰 수 있는 시장 목록 (MARKET:CODE 접두 허용 값). None 이면 {market}
+    markets: frozenset[str] | None = None
+
+    def __post_init__(self):
+        if self.markets is None:
+            object.__setattr__(self, "markets", frozenset({self.market}))
+
+    def symbol_code(self, symbol: str) -> str:
+        """심볼의 시장 접두가 지원 시장인지 확인하고 브로커 코드를 돌려준다. 미지원이면 ValueError."""
+        market, code = parse_symbol(symbol)
+        if market is not None and market not in self.markets:
+            raise ValueError(f"브로커 '{self.broker_id}' 는 시장 '{market}' 을 지원하지 않습니다 (지원: {sorted(self.markets)}): {symbol}")
+        return code

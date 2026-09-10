@@ -10,6 +10,8 @@ import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
+import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.ApiError
 import com.tripleauth.hermetix.client.dto.ApiErrorEnvelope
@@ -98,7 +100,19 @@ class NextApiClient(
         clientOrderId = true,
         nativeBracket = false, // 서버 /v2/orders/advanced(BRACKET) 연동 전까지 소프트웨어 브라켓 사용
         fractionalShares = false, // v1.3 주문 수량은 정수만 허용
+        environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE), // 키 프리픽스로 결정 (pk_test_ / pk_live_)
     )
+
+    override val environment: TradingEnvironment = properties.environment
+
+    init {
+        // 환경은 키 프리픽스가 결정한다 — 설정과 어긋나면 기동 실패 (실전 키를 모의로 착각하는 사고 방지)
+        val expectedPrefix = if (properties.environment == TradingEnvironment.LIVE) "pk_live_" else "pk_test_"
+        check(!properties.clientId.startsWith("pk_") || properties.clientId.startsWith(expectedPrefix)) {
+            "hermetix.next.environment=${properties.environment} 인데 client-id 가 '$expectedPrefix' 로 시작하지 않습니다 " +
+                "(모의=pk_test_, 실전=pk_live_). 키와 환경 설정을 맞추세요."
+        }
+    }
 
     private val restClient = RestClient.builder()
         .baseUrl(properties.baseUrl)
@@ -107,7 +121,9 @@ class NextApiClient(
     // ------------------------------------------------------------------ market
 
     override fun getQuotes(symbols: List<String>): QuotesResponse {
-        val raw: NextQuotesResponse = get { it.path("/v1/market/quotes").queryParam("symbols", symbols.joinToString(",")).build() }
+        val codes = symbols.map { capabilities.symbolCode(it) }
+        val raw: NextQuotesResponse = get { it.path("/v1/market/quotes").queryParam("symbols", codes.joinToString(",")).build() }
+        val requestedByCode = symbols.associateBy { capabilities.symbolCode(it) }
         val quotes = raw.quotes.mapNotNull { q ->
             // NOT_FOUND / NO_DATA 는 개별 종목의 정상 결과 — 가격이 없으므로 공통 모델에서는 제외한다 (context.quote() 가 null)
             if (q.outcome != "OK" || q.price == null) {
@@ -115,7 +131,7 @@ class NextApiClient(
                 return@mapNotNull null
             }
             Quote(
-                symbol = q.symbol,
+                symbol = requestedByCode[q.symbol] ?: q.symbol, // 요청받은 표기(시장 접두 포함)로 돌려준다
                 price = q.price,
                 bidPrice = q.bidPrice,
                 askPrice = q.askPrice,
@@ -129,15 +145,16 @@ class NextApiClient(
     }
 
     override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+        val code = capabilities.symbolCode(symbol)
         val raw: NextCandlesResponse = get {
             it.path("/v1/market/candles")
-                .queryParam("symbol", symbol)
+                .queryParam("symbol", code)
                 .queryParam("interval", interval.value)
                 .apply { if (limit != null) queryParam("limit", limit) }
                 .build()
         }
         return CandlesResponse(
-            symbol = raw.symbol,
+            symbol = symbol,
             interval = raw.interval ?: interval.value,
             candles = raw.candles.map { c ->
                 Candle(
@@ -230,7 +247,7 @@ class NextApiClient(
             NextOrderRequest(
                 clientOrderId = UUID.randomUUID().toString(), // 미리보기에서는 무시되지만 본문 계약상 필수
                 market = MARKET,
-                symbol = request.symbol,
+                symbol = capabilities.symbolCode(request.symbol),
                 side = request.side.name,
                 orderType = request.orderType.name,
                 quantity = request.quantity,
@@ -247,7 +264,7 @@ class NextApiClient(
                 // v1.3: clientOrderId 는 필수 멱등키 — 호출자가 안 주면 어댑터가 UUID 를 만든다
                 clientOrderId = request.clientOrderId ?: UUID.randomUUID().toString(),
                 market = MARKET,
-                symbol = request.symbol,
+                symbol = capabilities.symbolCode(request.symbol),
                 side = request.side.name,
                 orderType = request.orderType.name,
                 quantity = request.quantity,

@@ -88,29 +88,43 @@ type StrategyContext struct {
 	BuyingPower decimal.Decimal
 }
 
+// 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (SymbolsMatch).
+
+func bySymbol[T any](m map[string]T, symbol string) (T, bool) {
+	if v, ok := m[symbol]; ok {
+		return v, true
+	}
+	for k, v := range m {
+		if SymbolsMatch(k, symbol) {
+			return v, true
+		}
+	}
+	var zero T
+	return zero, false
+}
+
 func (c *StrategyContext) Quote(symbol string) (Quote, bool) {
-	q, ok := c.Quotes[symbol]
-	return q, ok
+	return bySymbol(c.Quotes, symbol)
 }
 
 func (c *StrategyContext) CandlesOf(symbol string) []Candle {
-	return c.Candles[symbol]
+	list, _ := bySymbol(c.Candles, symbol)
+	return list
 }
 
 func (c *StrategyContext) Holding(symbol string) (Holding, bool) {
-	h, ok := c.Holdings[symbol]
-	return h, ok
+	return bySymbol(c.Holdings, symbol)
 }
 
 func (c *StrategyContext) HasPosition(symbol string) bool {
-	h, ok := c.Holdings[symbol]
+	h, ok := c.Holding(symbol)
 	return ok && h.Quantity.IsPositive()
 }
 
 func (c *StrategyContext) OpenOrdersOf(symbol string) []Order {
 	result := make([]Order, 0)
 	for _, o := range c.OpenOrders {
-		if o.Symbol == symbol {
+		if o.Symbol != "" && SymbolsMatch(o.Symbol, symbol) {
 			result = append(result, o)
 		}
 	}

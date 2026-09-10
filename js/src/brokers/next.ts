@@ -20,8 +20,9 @@ import {
 } from "../errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote,
+  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment,
 } from "../models.js";
+import { symbolCodeFor } from "../models.js";
 
 interface NextError { type?: string; code?: string; message?: string; requestId?: string; }
 
@@ -68,6 +69,7 @@ export class NextClient implements BrokerClient {
     nativeBracket: false, // 서버 /v2/orders/advanced(BRACKET) 연동 전까지 소프트웨어 브라켓
     fractionalShares: false, // v1.3 주문 수량은 정수만
     serverOpenOrders: true,
+    environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]), // 키 프리픽스로 결정 (pk_test_ / pk_live_)
   };
 
   private token: string | null = null;
@@ -78,18 +80,26 @@ export class NextClient implements BrokerClient {
     private readonly clientSecret: string,
     private readonly accountId: string = "acc_main",
     private readonly baseUrl: string = "https://openapi.nextsecurities.dev",
-  ) {}
+    readonly environment: TradingEnvironment = "PAPER",
+  ) {
+    // 환경은 키 프리픽스가 결정한다 (pk_test_=모의, pk_live_=실전) — 설정과 어긋나면 기동 실패
+    const expected = environment === "LIVE" ? "pk_live_" : "pk_test_";
+    if (clientId.startsWith("pk_") && !clientId.startsWith(expected)) {
+      throw new Error(`environment=${environment} 인데 clientId 가 '${expected}' 로 시작하지 않습니다 (모의=pk_test_, 실전=pk_live_). 키와 환경 설정을 맞추세요.`);
+    }
+  }
 
   // ---------------------------------------------------------------- market
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
-    const body = await this.request("GET", `/v1/market/quotes?symbols=${symbols.join(",")}`);
+    const requested = new Map(symbols.map((s) => [symbolCodeFor(this.capabilities, s), s]));
+    const body = await this.request("GET", `/v1/market/quotes?symbols=${[...requested.keys()].join(",")}`);
     const quotes: Quote[] = [];
     for (const q of body.quotes as Record<string, unknown>[]) {
       // NOT_FOUND / NO_DATA 는 개별 종목의 정상 결과 — 가격이 없으므로 제외한다 (ctx.quote() 가 undefined)
       if (q.outcome !== "OK" || q.price == null) continue;
       quotes.push({
-        symbol: String(q.symbol),
+        symbol: requested.get(String(q.symbol)) ?? String(q.symbol), // 요청받은 표기(시장 접두 포함)로
         price: D(q.price),
         bidPrice: DorNull(q.bidPrice),
         askPrice: DorNull(q.askPrice),
@@ -103,7 +113,7 @@ export class NextClient implements BrokerClient {
   }
 
   async getCandles(symbol: string, interval: CandleInterval, limit?: number): Promise<Candle[]> {
-    let path = `/v1/market/candles?symbol=${symbol}&interval=${interval}`;
+    let path = `/v1/market/candles?symbol=${symbolCodeFor(this.capabilities, symbol)}&interval=${interval}`;
     if (limit !== undefined) path += `&limit=${limit}`;
     const body = await this.request("GET", path);
     return (body.candles as Record<string, unknown>[]).map((c) => ({
@@ -175,7 +185,7 @@ export class NextClient implements BrokerClient {
       // v1.3: clientOrderId(멱등키)·market 필수 — 호출자가 안 주면 어댑터가 UUID 를 만든다
       clientOrderId: request.clientOrderId || randomUUID(),
       market: MARKET,
-      symbol: request.symbol,
+      symbol: symbolCodeFor(this.capabilities, request.symbol),
       side: request.side,
       orderType: request.orderType,
       quantity: request.quantity.toString(),

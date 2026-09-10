@@ -11,6 +11,8 @@ import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
+import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
 import com.tripleauth.hermetix.client.dto.CalendarResponse
@@ -40,7 +42,8 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * 키움증권 REST 모의투자 어댑터. `hermetix.broker: kiwoom` 으로 활성화한다.
+ * 키움증권 REST 어댑터. `hermetix.broker: kiwoom` 으로 활성화한다.
+ * 실전(`hermetix.kiwoom.environment: live`)은 호스트 api.kiwoom.com 을 쓰며 TR ID 는 모의와 같다.
  *
  * 실측 기반 구현 (mockapi.kiwoom.com, 2026-08):
  * - 모든 호출은 POST + `api-id` 헤더(TR)로 라우팅된다
@@ -69,10 +72,13 @@ class KiwoomApiClient(
         clientOrderId = false,
         nativeBracket = false,
         fractionalShares = false,
+        environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
     )
 
+    override val environment: TradingEnvironment = properties.environment
+
     private val restClient = RestClient.builder()
-        .baseUrl(properties.baseUrl)
+        .baseUrl(properties.resolvedBaseUrl())
         .build()
 
     @Volatile
@@ -85,7 +91,7 @@ class KiwoomApiClient(
 
     override fun getQuotes(symbols: List<String>): QuotesResponse {
         val quotes = symbols.map { symbol ->
-            val node = call("/api/dostk/stkinfo", "ka10001", mapOf("stk_cd" to symbol))
+            val node = call("/api/dostk/stkinfo", "ka10001", mapOf("stk_cd" to capabilities.symbolCode(symbol)))
             Quote(
                 symbol = symbol,
                 price = node.signedDecimal("cur_prc").abs(),
@@ -108,7 +114,7 @@ class KiwoomApiClient(
 
         val rows = call(
             "/api/dostk/chart", "ka10081",
-            mapOf("stk_cd" to symbol, "base_dt" to LocalDate.now(KrxCalendar.KST).format(DATE), "upd_stkpc_tp" to "1"),
+            mapOf("stk_cd" to capabilities.symbolCode(symbol), "base_dt" to LocalDate.now(KrxCalendar.KST).format(DATE), "upd_stkpc_tp" to "1"),
         ).path("stk_dt_pole_chart_qry")
 
         // 키움은 최신순 → 공통 모델은 과거→최신
@@ -187,11 +193,12 @@ class KiwoomApiClient(
         }
 
         val apiId = if (request.side == OrderSide.BUY) "kt10000" else "kt10001"
+        val code = capabilities.symbolCode(request.symbol)
         val node = call(
             "/api/dostk/ordr", apiId,
             mapOf(
                 "dmst_stex_tp" to "KRX",
-                "stk_cd" to request.symbol,
+                "stk_cd" to code,
                 "ord_qty" to request.quantity.toPlainString(),
                 "ord_uv" to if (request.orderType == OrderType.LIMIT) KrxTick.round(request.limitPrice!!).toPlainString() else "",
                 "trde_tp" to if (request.orderType == OrderType.LIMIT) "0" else "3",
@@ -203,7 +210,7 @@ class KiwoomApiClient(
             orderId = node.path("ord_no").asText(),
             clientOrderId = request.clientOrderId,
             status = OrderStatus.SUBMITTED,
-            symbol = request.symbol,
+            symbol = code, // 보유/미체결과 같은 단일 시장 표기(접두 없음)
             side = request.side,
             orderType = request.orderType,
             quantity = request.quantity,

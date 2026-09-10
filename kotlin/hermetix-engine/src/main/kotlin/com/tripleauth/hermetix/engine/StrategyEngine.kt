@@ -3,6 +3,7 @@ package com.tripleauth.hermetix.engine
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.RateLimitError
+import com.tripleauth.hermetix.broker.TradingEnvironment
 import com.tripleauth.hermetix.market.MarketCalendarService
 import com.tripleauth.hermetix.strategy.StrategyContext
 import com.tripleauth.hermetix.strategy.TradingStrategy
@@ -18,6 +19,8 @@ import java.time.ZonedDateTime
  *
  * 등록된 모든 [TradingStrategy] 빈을 각자의 pollInterval 주기로 호출한다.
  * 매 틱: 장시간 확인 → 시장/계좌 스냅샷 구성 → 브라켓 점검 → 전략 호출 → 시그널 실행.
+ *
+ * 실전(LIVE) 게이트: 브로커가 LIVE 환경이면 [liveTradingEnabled] 가 true 일 때만 스케줄한다.
  */
 class StrategyEngine(
     private val strategies: List<TradingStrategy>,
@@ -26,9 +29,15 @@ class StrategyEngine(
     private val orderExecutor: OrderExecutor,
     private val bracketMonitor: BracketMonitor,
     private val tradingGuard: TradingGuard,
+    private val liveTradingEnabled: Boolean = false,
 ) : DisposableBean {
 
     private val logger = KotlinLogging.logger { }
+
+    /** 실제로 스케줄된 전략 이름 — 기동 검증 결과 확인용 */
+    @Volatile
+    var scheduledStrategies: List<String> = emptyList()
+        private set
 
     private val scheduler = ThreadPoolTaskScheduler().apply {
         poolSize = 1
@@ -44,8 +53,25 @@ class StrategyEngine(
         }
 
         val caps = brokerClient.capabilities
-        logger.info { "broker=${caps.brokerId} market=${caps.market} candles=${caps.candleIntervals.map { it.value }}" }
+        val environment = brokerClient.environment
+        logger.info { "broker=${caps.brokerId} environment=$environment market=${caps.market} candles=${caps.candleIntervals.map { it.value }}" }
 
+        if (environment !in caps.environments) {
+            logger.error { "브로커 '${caps.brokerId}' 는 $environment 환경을 지원하지 않습니다 (지원: ${caps.environments}) - 엔진을 시작하지 않습니다" }
+            return
+        }
+        if (environment == TradingEnvironment.LIVE && !liveTradingEnabled) {
+            logger.error {
+                "브로커 '${caps.brokerId}' 가 실전투자(LIVE)로 설정돼 있지만 hermetix.live.enabled=true 가 없습니다 - " +
+                    "엔진을 시작하지 않습니다. 실제 돈으로 거래하려면 설정에 명시하세요."
+            }
+            return
+        }
+        if (environment == TradingEnvironment.LIVE) {
+            logger.warn { "***** 실전투자(LIVE) 모드 - 주문이 실제 계좌에서 체결됩니다. 주문 금액 상한(hermetix.risk.*) 설정을 권장합니다 *****" }
+        }
+
+        val scheduled = mutableListOf<String>()
         strategies.forEach { strategy ->
             // capability 검증 — 미지원 조합은 스케줄하지 않고 명확히 알린다 (fail-fast)
             if (strategy.spec.candleInterval !in caps.candleIntervals) {
@@ -59,7 +85,9 @@ class StrategyEngine(
 
             logger.info { "strategy scheduled / ${strategy.spec.name} symbols=${strategy.spec.symbols} interval=${strategy.spec.pollInterval}" }
             scheduler.scheduleWithFixedDelay({ tick(strategy) }, strategy.spec.pollInterval)
+            scheduled += strategy.spec.name
         }
+        scheduledStrategies = scheduled
     }
 
     internal fun tick(strategy: TradingStrategy) {

@@ -4,11 +4,11 @@ from decimal import Decimal
 
 from hermetix import (
     Account, BrokerCapabilities, Buy, CandleInterval, Holding, Order, OrderSide,
-    OrderStatus, OrderType, Quote, Sell,
+    OrderStatus, OrderType, Quote, Sell, TradingEnvironment,
 )
 from hermetix.broker import BrokerClient
-from hermetix.engine import BracketMonitor, OrderExecutor, TradingGuard
-from hermetix.strategy import StrategyContext
+from hermetix.engine import BracketMonitor, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard
+from hermetix.strategy import Strategy, StrategyContext, StrategySpec
 
 
 class FakeBroker(BrokerClient):
@@ -17,7 +17,8 @@ class FakeBroker(BrokerClient):
     capabilities = BrokerCapabilities(
         broker_id="fake", market="US", currency="USD",
         candle_intervals=frozenset({CandleInterval.DAY_1}),
-        client_order_id=True, native_bracket=False, fractional_shares=False)
+        client_order_id=True, native_bracket=False, fractional_shares=False,
+        environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}))
 
     def __init__(self):
         self.created = []
@@ -125,3 +126,57 @@ def test_guard_halts_after_consecutive_failures():
         guard.record_failure(RuntimeError("boom"))
     assert guard.is_halted
     assert broker.canceled == ["ord_9"]  # 비상정지 시 미체결 취소
+
+
+# ------------------------------------------------------------- 0.6.0: 위험 상한 · 실전 게이트 · 심볼 접두
+
+def test_risk_guard_limits():
+    guard = RiskGuard(max_order_value=Decimal(1000))
+    assert guard.try_reserve("AAPL", Decimal(2), Decimal(600))  # 1200 > 1000
+    assert guard.try_reserve("AAPL", Decimal(1), Decimal(600)) is None
+    assert guard.try_reserve("AAPL", Decimal(1), None)  # 가격 미상 - 거부
+    assert RiskGuard().try_reserve("AAPL", Decimal(1), None) is None  # 상한 없음
+
+    day = {"d": datetime(2026, 9, 10, 23, tzinfo=timezone.utc)}
+    daily = RiskGuard(max_daily_order_value=Decimal(1000), now=lambda: day["d"])
+    assert daily.try_reserve("AAPL", Decimal(3), Decimal(300)) is None   # 900
+    assert daily.try_reserve("AAPL", Decimal(1), Decimal(300))           # 1200 - 거부
+    day["d"] = datetime(2026, 9, 11, 1, tzinfo=timezone.utc)             # UTC 자정 경과
+    assert daily.try_reserve("AAPL", Decimal(1), Decimal(300)) is None
+    assert daily.daily_total() == Decimal(300)
+
+
+def test_executor_skips_orders_over_risk_limit():
+    broker = FakeBroker()
+    executor = OrderExecutor(broker, BracketMonitor(broker), TradingGuard(broker), RiskGuard(max_order_value=Decimal(1000)))
+    executor.execute("t", [
+        Buy("AAPL", Decimal(5)),                                                   # 1500 - 거부
+        Buy("AAPL", Decimal(3)),                                                   # 900 - 통과
+        Buy("AAPL", Decimal(10), order_type=OrderType.LIMIT, limit_price=Decimal(50)),  # 500 지정가 기준 - 통과
+        Buy("NOPE", Decimal(1)),                                                   # 현재가 없음 - 거부
+    ], ctx(quotes={"AAPL": quote("AAPL", 300)}))
+    assert [r.quantity for r in broker.created] == [Decimal(3), Decimal(10)]
+
+
+class _Noop(Strategy):
+    spec = StrategySpec(name="t", symbols=["AAPL"])
+
+    def decide(self, ctx):
+        return []
+
+
+def test_live_gate_requires_explicit_consent():
+    broker = FakeBroker()
+    broker.environment = TradingEnvironment.LIVE
+    assert StrategyEngine(broker, [_Noop()]).strategies == []
+    assert [s.spec.name for s in StrategyEngine(broker, [_Noop()], live_trading_enabled=True).strategies] == ["t"]
+    broker.environment = TradingEnvironment.PAPER
+    assert [s.spec.name for s in StrategyEngine(broker, [_Noop()]).strategies] == ["t"]
+
+
+def test_context_matches_symbols_ignoring_market_prefix():
+    c = ctx(quotes={"KRX:005930": quote("KRX:005930", 70000)}, holdings={"005930": holding("005930", 3)})
+    assert c.quote("005930").price == Decimal(70000)
+    assert c.holding("KRX:005930").quantity == Decimal(3)
+    assert c.has_position("KRX:005930")
+    assert c.quote("AAPL") is None

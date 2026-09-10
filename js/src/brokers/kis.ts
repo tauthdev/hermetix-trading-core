@@ -14,7 +14,9 @@ import { AuthError, BrokerApiError, MarketClosedError, RateLimitError } from "..
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
   Fill, Holding, MarketDay, Order, Quote,
+  TradingEnvironment,
 } from "../models.js";
+import { symbolCodeFor } from "../models.js";
 import { isOpenStatus } from "../models.js";
 
 interface Tracked { order: Order; baselineQty: Decimal; day: string; }
@@ -29,6 +31,7 @@ export class KisClient implements BrokerClient {
     nativeBracket: false,
     fractionalShares: false,
     serverOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
+    environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
   };
 
   private token: string | null = null;
@@ -36,16 +39,30 @@ export class KisClient implements BrokerClient {
   private readonly throttle: Throttle;
   private readonly tracked = new Map<string, Tracked>();
 
+  static readonly PAPER_URL = "https://openapivts.koreainvestment.com:29443";
+  static readonly LIVE_URL = "https://openapi.koreainvestment.com:9443";
+  readonly baseUrl: string;
+
+  /**
+   * baseUrl 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
+   * throttleMs 0 이면 자동 — 모의 600(초당 2건), 실전 100(초당 20건 한도의 절반). 계좌 TR ID 는 모의 V / 실전 T 프리픽스.
+   */
   constructor(
     private readonly appkey: string,
     private readonly appsecret: string,
     private readonly cano: string,
     private readonly acntPrdtCd: string = "01",
-    private readonly baseUrl: string = "https://openapivts.koreainvestment.com:29443",
-    throttleMs = 600,
+    baseUrl: string = "",
+    throttleMs = 0,
+    readonly environment: TradingEnvironment = "PAPER",
   ) {
-    this.throttle = new Throttle(throttleMs);
+    const live = environment === "LIVE";
+    this.baseUrl = baseUrl || (live ? KisClient.LIVE_URL : KisClient.PAPER_URL);
+    this.throttle = new Throttle(throttleMs || (live ? 100 : 600));
   }
+
+  /** 계좌 TR ID — 모의 V, 실전 T 프리픽스 (예: tr("TTC0802U") → VTTC0802U / TTTC0802U) */
+  tr(suffix: string): string { return (this.environment === "LIVE" ? "T" : "V") + suffix; }
 
   // ---------------------------------------------------------------- market
 
@@ -53,7 +70,7 @@ export class KisClient implements BrokerClient {
     const quotes: Quote[] = [];
     for (const symbol of symbols) {
       const body = await this.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
-        { query: { FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: symbol } });
+        { query: { FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: symbolCodeFor(this.capabilities, symbol) } });
       const out = body.output as Record<string, unknown>;
       const rate = DorNull(out.prdy_ctrt);
       quotes.push({
@@ -74,7 +91,7 @@ export class KisClient implements BrokerClient {
     const count = limit ?? 30;
     const body = await this.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
       { query: {
-        FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: symbol,
+        FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: symbolCodeFor(this.capabilities, symbol),
         FID_INPUT_DATE_1: kstYyyymmdd(-(count * 1.6 + 10)),
         FID_INPUT_DATE_2: kstYyyymmdd(),
         FID_PERIOD_DIV_CODE: "D", FID_ORG_ADJ_PRC: "0",
@@ -123,7 +140,7 @@ export class KisClient implements BrokerClient {
   }
 
   async getBuyingPower(): Promise<Decimal> {
-    const body = await this.call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R",
+    const body = await this.call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", this.tr("TTC8908R"),
       { query: { ...this.acct(), PDNO: "005930", ORD_UNPR: "", ORD_DVSN: "01",
                  CMA_EVLU_AMT_ICLD_YN: "N", OVRS_ICLD_YN: "N" } });
     return D((body.output as Record<string, unknown>).ord_psbl_cash);
@@ -132,10 +149,11 @@ export class KisClient implements BrokerClient {
   // ---------------------------------------------------------------- orders
 
   async createOrder(request: CreateOrderRequest): Promise<Order> {
-    const trId = request.side === "BUY" ? "VTTC0802U" : "VTTC0801U";
+    const trId = this.tr(request.side === "BUY" ? "TTC0802U" : "TTC0801U");
+    const code = symbolCodeFor(this.capabilities, request.symbol);
     const isLimit = request.orderType === "LIMIT";
     const body = await this.call("POST", "/uapi/domestic-stock/v1/trading/order-cash", trId,
-      { json: { ...this.acct(), PDNO: request.symbol,
+      { json: { ...this.acct(), PDNO: code,
                 ORD_DVSN: isLimit ? "00" : "01",
                 ORD_QTY: request.quantity.toString(),
                 // KRX 호가단위 보정 - 맞지 않는 지정가는 거래소가 거부한다
@@ -143,12 +161,12 @@ export class KisClient implements BrokerClient {
     const order: Order = {
       orderId: String((body.output as Record<string, unknown>).ODNO),
       status: "SUBMITTED",
-      symbol: request.symbol, side: request.side, orderType: request.orderType,
+      symbol: code, side: request.side, orderType: request.orderType, // 보유/추적과 같은 단일 시장 표기
       quantity: request.quantity, limitPrice: request.limitPrice ?? null,
       filledQuantity: new Decimal(0), submittedAt: new Date(),
     };
     this.tracked.set(order.orderId, {
-      order, baselineQty: await this.holdingQty(request.symbol), day: kstToday(),
+      order, baselineQty: await this.holdingQty(code), day: kstToday(),
     });
     return order;
   }
@@ -166,7 +184,7 @@ export class KisClient implements BrokerClient {
 
   async cancelOrder(orderId: string): Promise<Order> {
     // 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
-    await this.call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U",
+    await this.call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", this.tr("TTC0803U"),
       { json: { ...this.acct(), KRX_FWDG_ORD_ORGNO: "", ORGN_ODNO: orderId, ORD_DVSN: "00",
                 RVSE_CNCL_DVSN_CD: "02", ORD_QTY: "0", ORD_UNPR: "0", QTY_ALL_ORD_YN: "Y" } });
     const canceled: Order = { orderId, status: "CANCELED", canceledAt: new Date() };
@@ -215,7 +233,7 @@ export class KisClient implements BrokerClient {
   }
 
   private balance(): Promise<Record<string, unknown>> {
-    return this.call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", "VTTC8434R",
+    return this.call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", this.tr("TTC8434R"),
       { query: { ...this.acct(), AFHR_FLPR_YN: "N", OFL_YN: "", INQR_DVSN: "02", UNPR_DVSN: "01",
                  FUND_STTL_ICLD_YN: "N", FNCG_AMT_AUTO_RDPT_YN: "N", PRCS_DVSN: "00",
                  CTX_AREA_FK100: "", CTX_AREA_NK100: "" } });

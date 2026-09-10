@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 from .broker import BrokerClient
 from .errors import InsufficientFundsError, MarketClosedError, RateLimitError
-from .models import CreateOrderRequest, Order, OrderSide, OrderStatus, OrderType
+from .models import CreateOrderRequest, Order, OrderSide, OrderStatus, OrderType, TradingEnvironment
 from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext
 
 logger = logging.getLogger("hermetix")
@@ -96,6 +96,56 @@ class TradingGuard:
         logger.info("trading resumed")
 
 
+class RiskGuard:
+    """주문 금액 상한 — 실전투자에서 봇 폭주 손실 규모를 제한한다 (모의에서도 설정하면 적용).
+
+    - max_order_value: 주문 1건의 추정 금액(수량 × 지정가 또는 현재가) 상한
+    - max_daily_order_value: 하루(UTC) 누적 주문 금액 상한 — 매수·매도 합산
+    추정 금액을 알 수 없으면(현재가 없음) 상한이 설정된 경우 거부한다. 누적치는 메모리에만 있다.
+    """
+
+    def __init__(self, max_order_value: Decimal | None = None, max_daily_order_value: Decimal | None = None,
+                 now: "callable | None" = None):
+        self._max_order = max_order_value
+        self._max_daily = max_daily_order_value
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._day = self._now().date()
+        self._daily_total = Decimal(0)
+        self._lock = threading.Lock()
+
+    @property
+    def is_active(self) -> bool:
+        return self._max_order is not None or self._max_daily is not None
+
+    def try_reserve(self, symbol: str, quantity: Decimal, price: Decimal | None) -> str | None:
+        """허용하면 일일 누적에 반영하고 None, 거부하면 사유. 누적은 제출 전에 잡는다 (보수적)."""
+        if not self.is_active:
+            return None
+        if price is None or price <= 0:
+            return f"가격을 알 수 없어 주문 금액 상한을 검증할 수 없습니다 (symbol={symbol})"
+        value = quantity * price
+        if self._max_order is not None and value > self._max_order:
+            return f"주문 금액 {value} 이(가) 1건 상한 {self._max_order} 을(를) 초과합니다 (symbol={symbol})"
+        with self._lock:
+            self._roll_day()
+            if self._max_daily is not None and self._daily_total + value > self._max_daily:
+                return (f"일일 누적 주문 금액 {self._daily_total + value} 이(가) 상한 {self._max_daily} 을(를) "
+                        f"초과합니다 (오늘 누적={self._daily_total})")
+            self._daily_total += value
+        return None
+
+    def daily_total(self) -> Decimal:
+        with self._lock:
+            self._roll_day()
+            return self._daily_total
+
+    def _roll_day(self) -> None:
+        today = self._now().date()
+        if today != self._day:
+            self._day = today
+            self._daily_total = Decimal(0)
+
+
 @dataclass(frozen=True)
 class _Bracket:
     entry_order_id: str
@@ -171,12 +221,14 @@ class BracketMonitor:
 
 
 class OrderExecutor:
-    """Signal -> 주문 실행. 매도 클램프(공매도 방지), 멱등키(지원 브로커만)."""
+    """Signal -> 주문 실행. 매도 클램프(공매도 방지), 주문 금액 상한(RiskGuard), 멱등키(지원 브로커만)."""
 
-    def __init__(self, broker: BrokerClient, brackets: BracketMonitor, guard: TradingGuard):
+    def __init__(self, broker: BrokerClient, brackets: BracketMonitor, guard: TradingGuard,
+                 risk: RiskGuard | None = None):
         self._broker = broker
         self._brackets = brackets
         self._guard = guard
+        self._risk = risk or RiskGuard()
 
     def execute(self, strategy_name: str, signals: list[Signal], ctx: StrategyContext) -> None:
         for signal in signals:
@@ -185,7 +237,7 @@ class OrderExecutor:
                 continue
             try:
                 if isinstance(signal, Buy):
-                    self._buy(strategy_name, signal)
+                    self._buy(strategy_name, signal, ctx)
                 elif isinstance(signal, Sell):
                     self._sell(strategy_name, signal, ctx)
                 elif isinstance(signal, Cancel):
@@ -196,7 +248,20 @@ class OrderExecutor:
             except Exception as e:  # noqa: BLE001 - 시그널 단위 격리
                 logger.error("[%s] signal 실행 실패 %s: %s", strategy_name, signal, e)
 
-    def _buy(self, strategy_name: str, signal: Buy) -> None:
+    def _within_risk(self, strategy_name: str, symbol: str, quantity: Decimal,
+                     limit_price: Decimal | None, ctx: StrategyContext) -> bool:
+        """추정 금액 = 수량 × (지정가 or 현재가). 상한을 넘으면 경고 후 False"""
+        quote = ctx.quote(symbol)
+        price = limit_price if limit_price is not None else (quote.price if quote else None)
+        rejection = self._risk.try_reserve(symbol, quantity, price)
+        if rejection is None:
+            return True
+        logger.warning("[%s] 주문 금액 상한으로 시그널 스킵: %s", strategy_name, rejection)
+        return False
+
+    def _buy(self, strategy_name: str, signal: Buy, ctx: StrategyContext) -> None:
+        if not self._within_risk(strategy_name, signal.symbol, signal.quantity, signal.limit_price, ctx):
+            return
         order = self._broker.create_order(CreateOrderRequest(
             symbol=signal.symbol, side=OrderSide.BUY, order_type=signal.order_type,
             quantity=signal.quantity, limit_price=signal.limit_price,
@@ -213,6 +278,8 @@ class OrderExecutor:
         qty = min(signal.quantity, held.quantity if held else Decimal(0))
         if qty <= 0:
             logger.warning("[%s] SELL 스킵 / %s 보유 수량 없음", strategy_name, signal.symbol)
+            return
+        if not self._within_risk(strategy_name, signal.symbol, qty, signal.limit_price, ctx):
             return
         order = self._broker.create_order(CreateOrderRequest(
             symbol=signal.symbol, side=OrderSide.SELL, order_type=signal.order_type,
@@ -231,16 +298,33 @@ class StrategyEngine:
     """등록된 전략들을 각자의 poll_interval 로 순차 호출한다."""
 
     def __init__(self, broker: BrokerClient, strategies: list[Strategy],
-                 max_consecutive_failures: int = 5):
+                 max_consecutive_failures: int = 5, *,
+                 live_trading_enabled: bool = False,
+                 max_order_value: Decimal | None = None,
+                 max_daily_order_value: Decimal | None = None):
+        """live_trading_enabled: 브로커가 LIVE 환경이면 True 여야 스케줄한다 (실전 명시 동의).
+        max_order_value / max_daily_order_value: 주문 금액 상한 (RiskGuard, 브로커 통화)."""
         self.broker = broker
         self.guard = TradingGuard(broker, max_consecutive_failures)
         self.brackets = BracketMonitor(broker)
-        self.executor = OrderExecutor(broker, self.brackets, self.guard)
+        self.risk = RiskGuard(max_order_value, max_daily_order_value)
+        self.executor = OrderExecutor(broker, self.brackets, self.guard, self.risk)
         self.calendar = MarketCalendar(broker)
         self._stop = threading.Event()
 
         caps = broker.capabilities
+        environment = broker.environment
         self.strategies = []
+        if environment not in caps.environments:
+            logger.error("브로커 '%s' 는 %s 환경을 지원하지 않습니다 (지원: %s) - 엔진을 시작하지 않습니다",
+                         caps.broker_id, environment.value, [e.value for e in caps.environments])
+            return
+        if environment == TradingEnvironment.LIVE and not live_trading_enabled:
+            logger.error("브로커 '%s' 가 실전투자(LIVE)로 설정돼 있지만 live_trading_enabled=True 가 없습니다 - "
+                         "엔진을 시작하지 않습니다. 실제 돈으로 거래하려면 명시하세요.", caps.broker_id)
+            return
+        if environment == TradingEnvironment.LIVE:
+            logger.warning("***** 실전투자(LIVE) 모드 - 주문이 실제 계좌에서 체결됩니다. 주문 금액 상한 설정을 권장합니다 *****")
         for strategy in strategies:
             # capability 검증 - 미지원 조합은 스케줄하지 않는다 (fail-fast)
             if strategy.spec.candle_interval not in caps.candle_intervals:
@@ -250,8 +334,8 @@ class StrategyEngine:
                     [i.value for i in caps.candle_intervals])
                 continue
             self.strategies.append(strategy)
-        logger.info("broker=%s market=%s / strategies=%s",
-                    caps.broker_id, caps.market, [s.spec.name for s in self.strategies])
+        logger.info("broker=%s environment=%s market=%s / strategies=%s",
+                    caps.broker_id, environment.value, caps.market, [s.spec.name for s in self.strategies])
 
     def run(self) -> None:
         """블로킹 실행 루프. stop() 또는 KeyboardInterrupt 로 종료."""

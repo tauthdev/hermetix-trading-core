@@ -243,14 +243,95 @@ func (b *BracketMonitor) ActiveCount() int {
 }
 
 // OrderExecutor - Signal -> 주문 실행. 매도 클램프(공매도 방지), 멱등키(지원 브로커만).
+// RiskGuard - 주문 금액 상한. 실전투자에서 봇 폭주 손실 규모를 제한한다 (모의에서도 설정하면 적용).
+// MaxOrderValue: 주문 1건 추정 금액(수량 × 지정가 또는 현재가) 상한. MaxDailyOrderValue: 하루(UTC) 누적 상한(매수·매도 합산).
+// 추정 금액을 알 수 없으면 상한이 설정된 경우 거부한다. 누적치는 메모리에만 있다.
+type RiskGuard struct {
+	maxOrderValue      *decimal.Decimal
+	maxDailyOrderValue *decimal.Decimal
+	now                func() time.Time
+	mu                 sync.Mutex
+	day                string
+	dailyTotal         decimal.Decimal
+}
+
+func NewRiskGuard(maxOrderValue, maxDailyOrderValue *decimal.Decimal) *RiskGuard {
+	g := &RiskGuard{maxOrderValue: maxOrderValue, maxDailyOrderValue: maxDailyOrderValue, now: time.Now}
+	g.day = g.today()
+	return g
+}
+
+func (g *RiskGuard) IsActive() bool { return g.maxOrderValue != nil || g.maxDailyOrderValue != nil }
+
+// TryReserve - 허용하면 일일 누적에 반영하고 "", 거부하면 사유. 누적은 제출 전에 잡는다 (보수적).
+func (g *RiskGuard) TryReserve(symbol string, quantity decimal.Decimal, price *decimal.Decimal) string {
+	if !g.IsActive() {
+		return ""
+	}
+	if price == nil || !price.IsPositive() {
+		return fmt.Sprintf("가격을 알 수 없어 주문 금액 상한을 검증할 수 없습니다 (symbol=%s)", symbol)
+	}
+	value := quantity.Mul(*price)
+	if g.maxOrderValue != nil && value.GreaterThan(*g.maxOrderValue) {
+		return fmt.Sprintf("주문 금액 %s 이(가) 1건 상한 %s 을(를) 초과합니다 (symbol=%s)", value, g.maxOrderValue, symbol)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.rollDay()
+	if g.maxDailyOrderValue != nil && g.dailyTotal.Add(value).GreaterThan(*g.maxDailyOrderValue) {
+		return fmt.Sprintf("일일 누적 주문 금액 %s 이(가) 상한 %s 을(를) 초과합니다 (오늘 누적=%s)", g.dailyTotal.Add(value), g.maxDailyOrderValue, g.dailyTotal)
+	}
+	g.dailyTotal = g.dailyTotal.Add(value)
+	return ""
+}
+
+func (g *RiskGuard) DailyTotal() decimal.Decimal {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.rollDay()
+	return g.dailyTotal
+}
+
+func (g *RiskGuard) today() string { return g.now().UTC().Format("2006-01-02") }
+
+func (g *RiskGuard) rollDay() {
+	if today := g.today(); today != g.day {
+		g.day = today
+		g.dailyTotal = decimal.Zero
+	}
+}
+
 type OrderExecutor struct {
 	broker   BrokerClient
 	brackets *BracketMonitor
 	guard    *TradingGuard
+	risk     *RiskGuard
 }
 
 func NewOrderExecutor(broker BrokerClient, brackets *BracketMonitor, guard *TradingGuard) *OrderExecutor {
-	return &OrderExecutor{broker, brackets, guard}
+	return &OrderExecutor{broker, brackets, guard, NewRiskGuard(nil, nil)}
+}
+
+// WithRisk - 주문 금액 상한 적용.
+func (e *OrderExecutor) WithRisk(risk *RiskGuard) *OrderExecutor {
+	e.risk = risk
+	return e
+}
+
+// withinRisk - 추정 금액 = 수량 × (지정가 or 현재가). 상한을 넘으면 경고 후 false.
+func (e *OrderExecutor) withinRisk(strategyName, symbol string, quantity decimal.Decimal, limitPrice *decimal.Decimal, ctx *StrategyContext) bool {
+	price := limitPrice
+	if price == nil {
+		if q, ok := ctx.Quote(symbol); ok {
+			p := q.Price
+			price = &p
+		}
+	}
+	if rejection := e.risk.TryReserve(symbol, quantity, price); rejection != "" {
+		log.Printf("WARN hermetix [%s] 주문 금액 상한으로 시그널 스킵: %s", strategyName, rejection)
+		return false
+	}
+	return true
 }
 
 func (e *OrderExecutor) Execute(strategyName string, signals []Signal, ctx *StrategyContext) {
@@ -262,7 +343,7 @@ func (e *OrderExecutor) Execute(strategyName string, signals []Signal, ctx *Stra
 		var err error
 		switch s := signal.(type) {
 		case BuySignal:
-			err = e.buy(strategyName, s)
+			err = e.buy(strategyName, s, ctx)
 		case SellSignal:
 			err = e.sell(strategyName, s, ctx)
 		case CancelSignal:
@@ -280,7 +361,10 @@ func (e *OrderExecutor) Execute(strategyName string, signals []Signal, ctx *Stra
 	}
 }
 
-func (e *OrderExecutor) buy(strategyName string, signal BuySignal) error {
+func (e *OrderExecutor) buy(strategyName string, signal BuySignal, ctx *StrategyContext) error {
+	if !e.withinRisk(strategyName, signal.Symbol, signal.Quantity, signal.LimitPrice, ctx) {
+		return nil
+	}
 	orderType := signal.OrderType
 	if orderType == "" {
 		orderType = Market
@@ -311,6 +395,9 @@ func (e *OrderExecutor) sell(strategyName string, signal SellSignal, ctx *Strate
 	qty := decimal.Min(signal.Quantity, held)
 	if !qty.IsPositive() {
 		log.Printf("WARN hermetix [%s] SELL 스킵 / %s 보유 수량 없음", strategyName, signal.Symbol)
+		return nil
+	}
+	if !e.withinRisk(strategyName, signal.Symbol, qty, signal.LimitPrice, ctx) {
 		return nil
 	}
 	orderType := signal.OrderType
@@ -351,13 +438,43 @@ type StrategyEngine struct {
 	stop       chan struct{}
 }
 
+// EngineOptions - 실전 게이트와 주문 금액 상한.
+type EngineOptions struct {
+	// 브로커가 Live 환경이면 true 여야 스케줄한다 (실전 명시 동의)
+	LiveTradingEnabled bool
+	// 주문 1건 추정 금액 상한 (브로커 통화)
+	MaxOrderValue *decimal.Decimal
+	// 하루(UTC) 누적 주문 금액 상한
+	MaxDailyOrderValue     *decimal.Decimal
+	MaxConsecutiveFailures int
+}
+
 func NewStrategyEngine(broker BrokerClient, strategies []Strategy) *StrategyEngine {
-	guard := NewTradingGuard(broker, 5)
+	return NewStrategyEngineWithOptions(broker, strategies, EngineOptions{})
+}
+
+func NewStrategyEngineWithOptions(broker BrokerClient, strategies []Strategy, opts EngineOptions) *StrategyEngine {
+	guard := NewTradingGuard(broker, opts.MaxConsecutiveFailures)
 	brackets := NewBracketMonitor(broker)
+	risk := NewRiskGuard(opts.MaxOrderValue, opts.MaxDailyOrderValue)
 	caps := broker.Capabilities()
+	environment := broker.Environment()
+	if environment == "" {
+		environment = Paper
+	}
 
 	accepted := make([]Strategy, 0, len(strategies))
 	names := make([]string, 0, len(strategies))
+	switch {
+	case !caps.SupportsEnvironment(environment):
+		log.Printf("ERROR hermetix 브로커 '%s' 는 %s 환경을 지원하지 않습니다 - 엔진을 시작하지 않습니다", caps.BrokerID, environment)
+		strategies = nil
+	case environment == Live && !opts.LiveTradingEnabled:
+		log.Printf("ERROR hermetix 브로커 '%s' 가 실전투자(LIVE)로 설정돼 있지만 LiveTradingEnabled 가 없습니다 - 엔진을 시작하지 않습니다. 실제 돈으로 거래하려면 명시하세요.", caps.BrokerID)
+		strategies = nil
+	case environment == Live:
+		log.Printf("WARN hermetix ***** 실전투자(LIVE) 모드 - 주문이 실제 계좌에서 체결됩니다. 주문 금액 상한(MaxOrderValue 등) 설정을 권장합니다 *****")
+	}
 	for _, strategy := range strategies {
 		spec := strategy.Spec()
 		// capability 검증 - 미지원 조합은 스케줄하지 않는다 (fail-fast)
@@ -369,12 +486,12 @@ func NewStrategyEngine(broker BrokerClient, strategies []Strategy) *StrategyEngi
 		accepted = append(accepted, strategy)
 		names = append(names, spec.Name)
 	}
-	log.Printf("INFO hermetix broker=%s market=%s / strategies=%v", caps.BrokerID, caps.Market, names)
+	log.Printf("INFO hermetix broker=%s environment=%s market=%s / strategies=%v", caps.BrokerID, environment, caps.Market, names)
 
 	return &StrategyEngine{
 		Broker: broker, Guard: guard, Brackets: brackets,
-		Executor: NewOrderExecutor(broker, brackets, guard),
-		Calendar: NewMarketCalendar(broker),
+		Executor:   NewOrderExecutor(broker, brackets, guard).WithRisk(risk),
+		Calendar:   NewMarketCalendar(broker),
 		Strategies: accepted,
 		stop:       make(chan struct{}),
 	}

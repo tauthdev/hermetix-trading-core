@@ -14,6 +14,7 @@ import com.tripleauth.hermetix.client.NextApiProperties
 import com.tripleauth.hermetix.client.TokenManager
 import com.tripleauth.hermetix.engine.BracketMonitor
 import com.tripleauth.hermetix.engine.OrderExecutor
+import com.tripleauth.hermetix.engine.RiskGuard
 import com.tripleauth.hermetix.engine.StrategyEngine
 import com.tripleauth.hermetix.engine.TradingGuard
 import com.tripleauth.hermetix.market.MarketCalendarService
@@ -28,7 +29,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 
 @AutoConfiguration
-@EnableConfigurationProperties(NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class, NextEngineProperties::class, NextPnlProperties::class)
+@EnableConfigurationProperties(
+    NextApiProperties::class, KisApiProperties::class, KiwoomApiProperties::class,
+    NextEngineProperties::class, NextPnlProperties::class, HermetixLiveProperties::class, HermetixRiskProperties::class,
+)
 class NextTradingAutoConfiguration {
 
     // 앱의 전역 Jackson 설정을 건드리지 않도록 빈으로 노출하지 않는다 (API 통신 전용)
@@ -78,8 +82,13 @@ class NextTradingAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    fun orderExecutor(brokerClient: BrokerClient, bracketMonitor: BracketMonitor, tradingGuard: TradingGuard): OrderExecutor =
-        OrderExecutor(brokerClient, bracketMonitor, tradingGuard)
+    fun riskGuard(riskProperties: HermetixRiskProperties): RiskGuard =
+        RiskGuard(riskProperties.maxOrderValue, riskProperties.maxDailyOrderValue)
+
+    @Bean
+    @ConditionalOnMissingBean
+    fun orderExecutor(brokerClient: BrokerClient, bracketMonitor: BracketMonitor, tradingGuard: TradingGuard, riskGuard: RiskGuard): OrderExecutor =
+        OrderExecutor(brokerClient, bracketMonitor, tradingGuard, riskGuard)
 
     @Bean
     @ConditionalOnMissingBean
@@ -107,6 +116,7 @@ class NextTradingAutoConfiguration {
         orderExecutor: OrderExecutor,
         bracketMonitor: BracketMonitor,
         tradingGuard: TradingGuard,
+        liveProperties: HermetixLiveProperties,
     ): StrategyEngine =
-        StrategyEngine(strategies, brokerClient, marketCalendarService, orderExecutor, bracketMonitor, tradingGuard)
+        StrategyEngine(strategies, brokerClient, marketCalendarService, orderExecutor, bracketMonitor, tradingGuard, liveProperties.enabled)
 }

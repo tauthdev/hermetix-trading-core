@@ -45,6 +45,27 @@ broker = KiwoomClient(appkey=..., secretkey=...)          # 키움 모의 (KRX)
 
 KRX 브로커는 일봉(DAY_1)만 지원합니다 — 엔진이 기동 시 비호환 전략을 걸러내고 이유를 알려줍니다.
 
+## 실전투자로 전환
+
+모의에서 검증한 뒤 실제 계좌로 옮길 때는 환경과 명시 동의를 함께 지정합니다. 하나라도 빠지면 엔진이 전략을 스케줄하지 않습니다.
+
+```python
+from decimal import Decimal
+from hermetix import KisClient, StrategyEngine, TradingEnvironment
+
+broker = KisClient(appkey=..., appsecret=..., cano=..., environment=TradingEnvironment.LIVE)  # 호스트·TR ID 자동 전환
+StrategyEngine(
+    broker, [MyStrategy()],
+    live_trading_enabled=True,               # 실전 명시 동의
+    max_order_value=Decimal(1_000_000),      # 주문 1건 상한 (브로커 통화)
+    max_daily_order_value=Decimal(5_000_000),  # 하루(UTC) 누적 상한 — 매수·매도 합산
+).run()
+```
+
+- 넥스트증권은 키 프리픽스가 환경을 결정합니다 (`pk_test_`=모의, `pk_live_`=실전). `environment` 와 어긋나면 생성 시 `ValueError`
+- 심볼에 시장 접두를 붙일 수 있습니다 (`KRX:005930`, `US:AAPL`). 접두 없는 심볼은 브로커 기본 시장으로 해석됩니다
+- 키는 항상 당신의 기기에서만 쓰입니다. Hermetix 는 어떤 서버로도 키를 보내지 않습니다
+
 ## 수익률
 
 ```python

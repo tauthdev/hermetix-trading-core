@@ -17,6 +17,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from .models import (
+    TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
     Fill, Holding, MarketDay, Order, Quote, SessionHours,
 )
@@ -33,6 +34,8 @@ class BrokerClient(ABC):
     """
 
     capabilities: BrokerCapabilities
+    # 이 인스턴스가 연결된 거래 환경. 엔진은 LIVE 면 명시 동의(live_trading_enabled)를 요구한다
+    environment: TradingEnvironment = TradingEnvironment.PAPER
 
     @abstractmethod
     def get_quotes(self, symbols: list[str]) -> list[Quote]: ...

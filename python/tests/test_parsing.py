@@ -314,3 +314,44 @@ def test_kiwoom_holdings_strips_a_prefix(monkeypatch):
     h = client.get_holdings()[0]
     assert h.symbol == "005930"
     assert h.current_price == Decimal("240000")
+
+
+# ------------------------------------------------------------- 0.6.0: 환경 · 심볼 접두
+
+def test_next_environment_must_match_key_prefix():
+    from hermetix import TradingEnvironment
+    import pytest
+    with pytest.raises(ValueError):
+        NextClient("pk_test_x", "s", environment=TradingEnvironment.LIVE)
+    with pytest.raises(ValueError):
+        NextClient("pk_live_x", "s", environment=TradingEnvironment.PAPER)
+    assert NextClient("pk_live_x", "s", environment=TradingEnvironment.LIVE).environment == TradingEnvironment.LIVE
+    assert NextClient("k", "s").environment == TradingEnvironment.PAPER
+
+
+def test_next_market_prefixed_symbol(monkeypatch):
+    import pytest
+    client = NextClient("k", "s")
+    seen = {}
+
+    def fake_request(method, path, *, query=None, json_body=None, account=False):
+        seen["query"] = query
+        return {"quotes": [{"symbol": "AAPL", "outcome": "OK", "price": "1", "requestedAt": "2026-09-10T23:10:00+09:00"}]}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    assert client.get_quotes(["US:AAPL"])[0].symbol == "US:AAPL"
+    assert seen["query"] == {"symbols": "AAPL"}
+    with pytest.raises(ValueError):
+        client.get_quotes(["KRX:005930"])
+
+
+def test_kis_environment_host_and_tr_prefix():
+    from hermetix import TradingEnvironment
+    paper = KisClient("k", "s", "50199202")
+    live = KisClient("k", "s", "50199202", environment=TradingEnvironment.LIVE)
+    assert paper._http.base_url == KisClient.PAPER_URL and paper._tr("TTC0802U") == "VTTC0802U"
+    assert live._http.base_url == KisClient.LIVE_URL and live._tr("TTC0802U") == "TTTC0802U"
+    assert paper._throttle.min_interval == 0.6 and live._throttle.min_interval == 0.1
+    assert KisClient("k", "s", "c", base_url="http://custom")._http.base_url == "http://custom"
+    assert KiwoomClient("k", "s", environment=TradingEnvironment.LIVE)._http.base_url == KiwoomClient.LIVE_URL
+    assert KiwoomClient("k", "s")._http.base_url == KiwoomClient.PAPER_URL

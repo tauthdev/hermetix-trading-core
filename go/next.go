@@ -98,6 +98,7 @@ type NextClient struct {
 	clientSecret string
 	accountID    string
 	baseURL      string
+	environment  TradingEnvironment
 	http         *http.Client
 	tokenMu      sync.Mutex
 	token        string
@@ -109,13 +110,30 @@ type NextClient struct {
 func NewNextClient(clientID, clientSecret string) *NextClient {
 	c := &NextClient{
 		clientID: clientID, clientSecret: clientSecret,
-		accountID: "acc_main",
-		baseURL:   "https://openapi.nextsecurities.dev",
-		http:      &http.Client{Timeout: 30 * time.Second},
+		accountID:   "acc_main",
+		baseURL:     "https://openapi.nextsecurities.dev",
+		environment: Paper,
+		http:        &http.Client{Timeout: 30 * time.Second},
 	}
 	c.call = c.request
 	return c
 }
+
+// SetEnvironment - 거래 환경 지정. 넥스트증권은 키 프리픽스로 환경이 정해지므로(pk_test_=모의, pk_live_=실전)
+// 설정과 키가 어긋나면 에러 (실전 키를 모의로 착각하는 사고 방지).
+func (c *NextClient) SetEnvironment(env TradingEnvironment) error {
+	expected := "pk_test_"
+	if env == Live {
+		expected = "pk_live_"
+	}
+	if strings.HasPrefix(c.clientID, "pk_") && !strings.HasPrefix(c.clientID, expected) {
+		return fmt.Errorf("environment=%s 인데 clientID 가 '%s' 로 시작하지 않습니다 (모의=pk_test_, 실전=pk_live_)", env, expected)
+	}
+	c.environment = env
+	return nil
+}
+
+func (c *NextClient) Environment() TradingEnvironment { return c.environment }
 
 func (c *NextClient) Capabilities() BrokerCapabilities {
 	return BrokerCapabilities{
@@ -125,13 +143,25 @@ func (c *NextClient) Capabilities() BrokerCapabilities {
 		NativeBracket:    false, // 서버 /v2/orders/advanced(BRACKET) 연동 전까지 소프트웨어 브라켓
 		FractionalShares: false, // v1.3 주문 수량은 정수만
 		ServerOpenOrders: true,
+		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true}, // 키 프리픽스로 결정
 	}
 }
 
 // ------------------------------------------------------------------- market
 
 func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
-	body, err := c.call("GET", "/v1/market/quotes?symbols="+strings.Join(symbols, ","), false, nil)
+	caps := c.Capabilities()
+	codes := make([]string, 0, len(symbols))
+	requested := map[string]string{}
+	for _, s := range symbols {
+		code, err := caps.SymbolCode(s)
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+		requested[code] = s
+	}
+	body, err := c.call("GET", "/v1/market/quotes?symbols="+strings.Join(codes, ","), false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +171,10 @@ func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
 		if str(q["outcome"]) != "OK" || q["price"] == nil {
 			continue
 		}
+		symbol := str(q["symbol"])
+		if req, ok := requested[symbol]; ok {
+			symbol = req // 요청받은 표기(시장 접두 포함)로
+		}
 		ts := parseNextTime(str(q["lastTradeAt"]))
 		if ts.IsZero() {
 			ts = parseNextTime(str(q["requestedAt"]))
@@ -149,7 +183,7 @@ func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
 			ts = time.Now()
 		}
 		quotes = append(quotes, Quote{
-			Symbol: str(q["symbol"]), Price: d(q["price"]),
+			Symbol: symbol, Price: d(q["price"]),
 			BidPrice: dOrNil(q["bidPrice"]), AskPrice: dOrNil(q["askPrice"]),
 			Volume: d(q["volume"]).IntPart(),
 			Change: dOrNil(q["change"]), ChangeRate: pctOrNil(q["changeRate"]),
@@ -160,7 +194,11 @@ func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
 }
 
 func (c *NextClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
-	path := fmt.Sprintf("/v1/market/candles?symbol=%s&interval=%s", symbol, interval)
+	code, err := c.Capabilities().SymbolCode(symbol)
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("/v1/market/candles?symbol=%s&interval=%s", code, interval)
 	if limit > 0 {
 		path += fmt.Sprintf("&limit=%d", limit)
 	}
@@ -275,10 +313,14 @@ func (c *NextClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 		// v1.3: clientOrderId(멱등키) 필수 — 호출자가 안 주면 어댑터가 만든다
 		clientOrderID = NewRequestID()
 	}
+	code, err := c.Capabilities().SymbolCode(request.Symbol)
+	if err != nil {
+		return Order{}, err
+	}
 	payload := map[string]any{
 		"clientOrderId": clientOrderID,
 		"market":        nextMarket,
-		"symbol":        request.Symbol, "side": string(request.Side),
+		"symbol":        code, "side": string(request.Side),
 		"orderType": string(request.OrderType), "quantity": request.Quantity.String(),
 		"timeInForce": string(tif),
 	}

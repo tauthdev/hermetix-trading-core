@@ -120,6 +120,26 @@ tick(strategy):
 
 네이티브 전환 로드맵: `OrderExecutor.buy()` 에서 tp/sl 존재 시 `/v2/orders/advanced` BRACKET 주문으로 보내는 fast-path 를 추가하고(`BrokerCapabilities.nativeBracket=true`), BracketMonitor 는 폴백으로 강등한다.
 
+## 거래 환경과 실전 게이트 (0.6.0)
+
+- `TradingEnvironment { PAPER, LIVE }` — 어댑터 설정(`hermetix.<broker>.environment`)으로 정한다. `BrokerClient.environment` 로 노출되고, `BrokerCapabilities.environments` 에 어댑터가 실측한 지원 환경을 선언한다
+- 어댑터별 환경 처리: next 는 키 프리픽스(`pk_test_`/`pk_live_`)와 설정이 어긋나면 생성 실패. kis 는 호스트(openapivts:29443 / openapi:9443)·계좌 TR 프리픽스(V/T)·쓰로틀(600ms/100ms)을 바꾼다. kiwoom 은 호스트(mockapi / api)만 바뀐다
+- `StrategyEngine.start()`: 브로커 환경이 capabilities 에 없거나, LIVE 인데 `hermetix.live.enabled=false` 면 **전략을 스케줄하지 않는다** (로그 에러, 예외 없음 — 앱은 뜨되 봇은 멈춘다). `scheduledStrategies` 로 결과를 확인할 수 있다
+- 키는 항상 사용자 기기에서만 쓰인다. Hermetix 가 운영하는 서버로 키를 받는 구조는 한국 금융 라이선스 문제로 설계상 금지다
+
+## 주문 금액 상한 (RiskGuard)
+
+- `hermetix.risk.max-order-value`(1건) / `max-daily-order-value`(UTC 일 누적, 매수·매도 합산). 둘 다 없으면 비활성
+- `OrderExecutor` 가 제출 직전에 `tryReserve(symbol, qty, price)` — price 는 지정가 ?: 현재가. 가격을 모르면 상한이 설정된 경우 거부. 허용 시 누적을 먼저 잡고 제출 실패해도 되돌리지 않는다(보수적)
+- 누적치는 메모리 — 재시작 시 0 (상태 지도 참조)
+
+## 시장 접두 심볼 (MarketSymbol)
+
+- `MARKET:CODE` (`KRX:005930`, `US:AAPL`). 접두는 대문자 2~6자. 접두 없는 심볼은 `capabilities.market` 으로 해석 → 기존 전략 무변경
+- 어댑터는 `capabilities.symbolCode(symbol)` 로 시장 지원 여부를 검증하고 코드만 API 에 보낸다. 시세/캔들은 요청받은 표기로 돌려주고, 보유/주문은 어댑터 표기(단일 시장이면 접두 없음)로 돌려준다
+- `StrategyContext` 조회 메서드는 `MarketSymbol.matches` 로 접두 유무를 무시하고 코드로 맞춘다 (둘 다 시장을 명시했다면 시장도 같아야 한다)
+- 다중 시장 브로커(NH·토스 등)는 `capabilities.markets` 에 여러 시장을 선언하고 보유/주문 심볼을 접두 포함으로 돌려준다
+
 ## 비상정지 (TradingGuard)
 
 서버 킬 스위치(`/v2/kill-switch`, v1.3 시점 `/v2` 로 제공)를 아직 연동하지 않아 클라이언트 측에서 같은 효과를 낸다:
@@ -138,6 +158,7 @@ tick(strategy):
 | 시장 캘린더 | 메모리 캐시 (6h TTL) | 재조회 (자동) |
 | 브라켓 (익절/손절 예약) | 메모리 (BracketMonitor) | **소실** |
 | 비상정지 플래그, 연속 실패 카운터 | 메모리 (TradingGuard) | 초기화 (정지 해제됨) |
+| 일일 누적 주문 금액 | 메모리 (RiskGuard) | **초기화** — 재시작 직후 하루 상한이 다시 열린다 |
 | 전략 내부 상태 (진입 시각, 감쇠 카운터 등) | 메모리 (전략 필드) | **소실** — 전략이 서버 상태로 복원하는 패턴 권장 |
 
 ## 에러 처리 계층 (0.5.0+)

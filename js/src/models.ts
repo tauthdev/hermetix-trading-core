@@ -8,6 +8,37 @@ import { Decimal } from "decimal.js";
 export { Decimal };
 
 export type CandleInterval = "1m" | "5m" | "1h" | "1d";
+
+/** 거래 환경. PAPER=모의투자(기본), LIVE=실전 — 엔진은 liveTradingEnabled 없이는 LIVE 를 기동하지 않는다. 키는 항상 사용자 기기에서만 쓰인다 */
+export type TradingEnvironment = "PAPER" | "LIVE";
+
+const MARKET_PREFIX = /^([A-Z]{2,6}):(.+)$/;
+
+/** `MARKET:CODE` 표기를 { market, code } 로 나눈다. 접두가 없으면 market=null */
+export function parseSymbol(symbol: string): { market: string | null; code: string } {
+  const m = MARKET_PREFIX.exec(symbol);
+  return m ? { market: m[1], code: m[2] } : { market: null, code: symbol };
+}
+
+/** 접두를 뗀 브로커 심볼 코드 */
+export const symbolCode = (symbol: string): string => parseSymbol(symbol).code;
+
+/** 코드가 같고, 둘 다 시장을 명시했다면 시장도 같아야 한다 */
+export function symbolsMatch(a: string, b: string): boolean {
+  const x = parseSymbol(a);
+  const y = parseSymbol(b);
+  return x.code === y.code && (x.market === null || y.market === null || x.market === y.market);
+}
+
+/** 심볼의 시장 접두가 지원 시장인지 확인하고 브로커 코드를 돌려준다. 미지원이면 throw */
+export function symbolCodeFor(caps: BrokerCapabilities, symbol: string): string {
+  const { market, code } = parseSymbol(symbol);
+  const markets = caps.markets ?? new Set([caps.market]);
+  if (market !== null && !markets.has(market)) {
+    throw new Error(`브로커 '${caps.brokerId}' 는 시장 '${market}' 을 지원하지 않습니다 (지원: ${[...markets].join(",")}): ${symbol}`);
+  }
+  return code;
+}
 export type OrderSide = "BUY" | "SELL";
 export type OrderType = "MARKET" | "LIMIT";
 export type TimeInForce = "DAY" | "GTC";
@@ -116,4 +147,8 @@ export interface BrokerCapabilities {
   fractionalShares: boolean;
   /** false 면 어댑터가 메모리 추적 (재시작 시 추적 소실) */
   serverOpenOrders: boolean;
+  /** 지원 거래 환경. 생략 시 PAPER 만. 실전(LIVE)은 실측으로 확인한 어댑터만 선언 */
+  environments?: ReadonlySet<TradingEnvironment>;
+  /** 한 계좌로 다룰 수 있는 시장 목록 (MARKET:CODE 접두 허용 값). 생략 시 {market} */
+  markets?: ReadonlySet<string>;
 }

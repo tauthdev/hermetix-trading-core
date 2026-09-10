@@ -265,3 +265,54 @@ func TestKrxTickRound(t *testing.T) {
 		}
 	}
 }
+
+// ------------------------------------------------------------- 0.6.0: 환경 · 심볼 접두
+
+func TestNextEnvironmentMustMatchKeyPrefix(t *testing.T) {
+	if err := NewNextClient("pk_test_x", "s").SetEnvironment(Live); err == nil {
+		t.Fatal("pk_test_ 키로 LIVE 는 에러")
+	}
+	if err := NewNextClient("pk_live_x", "s").SetEnvironment(Paper); err == nil {
+		t.Fatal("pk_live_ 키로 PAPER 는 에러")
+	}
+	c := NewNextClient("pk_live_x", "s")
+	if err := c.SetEnvironment(Live); err != nil || c.Environment() != Live {
+		t.Fatalf("LIVE 설정 실패: %v", err)
+	}
+	if NewNextClient("k", "s").Environment() != Paper {
+		t.Fatal("기본은 PAPER")
+	}
+}
+
+func TestNextMarketPrefixedSymbol(t *testing.T) {
+	c := NewNextClient("k", "s")
+	seen := ""
+	c.call = func(method, path string, account bool, jsonBody map[string]any) (map[string]any, error) {
+		seen = path
+		return map[string]any{"quotes": []any{map[string]any{"symbol": "AAPL", "outcome": "OK", "price": "1", "requestedAt": "2026-09-10T23:10:00+09:00"}}}, nil
+	}
+	quotes, err := c.GetQuotes([]string{"US:AAPL"})
+	if err != nil || quotes[0].Symbol != "US:AAPL" || seen != "/v1/market/quotes?symbols=AAPL" {
+		t.Fatalf("quotes=%+v path=%s err=%v", quotes, seen, err)
+	}
+	if _, err := c.GetQuotes([]string{"KRX:005930"}); err == nil {
+		t.Fatal("미지원 시장은 에러")
+	}
+}
+
+func TestKisKiwoomEnvironmentHostAndTR(t *testing.T) {
+	paper := NewKisClient("k", "s", "50199202")
+	live := NewKisClient("k", "s", "50199202").SetEnvironment(Live)
+	if paper.BaseURL() != KisPaperURL || paper.tr("TTC0802U") != "VTTC0802U" {
+		t.Fatalf("paper = %s %s", paper.BaseURL(), paper.tr("TTC0802U"))
+	}
+	if live.BaseURL() != KisLiveURL || live.tr("TTC0802U") != "TTTC0802U" || live.Environment() != Live {
+		t.Fatalf("live = %s %s", live.BaseURL(), live.tr("TTC0802U"))
+	}
+	if custom := NewKisClient("k", "s", "c").SetBaseURL("http://custom").SetEnvironment(Live); custom.BaseURL() != "http://custom" {
+		t.Fatal("직접 지정한 호스트는 유지")
+	}
+	if NewKiwoomClient("k", "s").SetEnvironment(Live).BaseURL() != KiwoomLiveURL || NewKiwoomClient("k", "s").BaseURL() != KiwoomPaperURL {
+		t.Fatal("kiwoom 호스트")
+	}
+}

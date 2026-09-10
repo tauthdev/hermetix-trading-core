@@ -11,6 +11,8 @@ import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
+import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
 import com.tripleauth.hermetix.client.dto.CalendarResponse
@@ -41,12 +43,14 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * 한국투자증권(KIS) 모의투자 어댑터. `hermetix.broker: kis` 로 활성화한다.
+ * 한국투자증권(KIS) 어댑터. `hermetix.broker: kis` 로 활성화한다.
  *
  * 실측 기반 구현 (모의투자 도메인, 2026-08):
  * - 응답 엔벨로프: rt_cd("0"=성공) / msg_cd / msg1 / output*
- * - 모의 서버는 초당 요청 제한이 있어 모든 호출에 최소 간격 쓰로틀을 건다
- * - 모의 TR-ID 는 V 프리픽스 (잔고 VTTC8434R, 매수 VTTC0802U, 매도 VTTC0801U, 취소 VTTC0803U)
+ * - 서버는 초당 요청 제한이 있어 모든 호출에 최소 간격 쓰로틀을 건다 (모의 2건/s, 실전 20건/s)
+ * - 계좌 TR-ID 는 환경 프리픽스가 다르다 — 모의 V (VTTC8434R…), 실전 T (TTTC8434R…). 시세 TR(FHKST…)은 공통
+ * - 실전(`hermetix.kis.environment: live`)은 호스트 openapi.koreainvestment.com:9443 을 쓴다.
+ *   실전 미체결/체결 조회 TR 은 아직 연동하지 않아 주문 추적은 모의와 같은 메모리 방식이다
  *
  * 제약 (문서화된 트레이드오프):
  * - 캔들은 일봉(DAY_1)만 지원한다 — KIS 분봉 API 는 당일 데이터만 제공해 lookback 전략에 부적합
@@ -74,13 +78,16 @@ class KisApiClient(
         nativeBracket = false,
         fractionalShares = false,
         serverOpenOrders = false, // 모의 서버가 주문 조회를 제공하지 않음 - 어댑터 내부 추적
+        environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
     )
+
+    override val environment: TradingEnvironment = properties.environment
 
     /** 어댑터 내부 주문 추적 (모의 서버가 주문 조회 미제공) */
     private val trackedOrders = java.util.concurrent.ConcurrentHashMap<String, TrackedOrder>()
 
     private val restClient = RestClient.builder()
-        .baseUrl(properties.baseUrl)
+        .baseUrl(properties.resolvedBaseUrl())
         .build()
 
     @Volatile
@@ -95,7 +102,7 @@ class KisApiClient(
         val quotes = symbols.map { symbol ->
             val output = call(
                 HttpMethod.GET, "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
-                query = mapOf("FID_COND_MRKT_DIV_CODE" to "J", "FID_INPUT_ISCD" to symbol),
+                query = mapOf("FID_COND_MRKT_DIV_CODE" to "J", "FID_INPUT_ISCD" to capabilities.symbolCode(symbol)),
             ).path("output")
 
             Quote(
@@ -126,7 +133,7 @@ class KisApiClient(
         val rows = call(
             HttpMethod.GET, "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
             query = mapOf(
-                "FID_COND_MRKT_DIV_CODE" to "J", "FID_INPUT_ISCD" to symbol,
+                "FID_COND_MRKT_DIV_CODE" to "J", "FID_INPUT_ISCD" to capabilities.symbolCode(symbol),
                 "FID_INPUT_DATE_1" to start.format(DATE), "FID_INPUT_DATE_2" to today.format(DATE),
                 "FID_PERIOD_DIV_CODE" to "D", "FID_ORG_ADJ_PRC" to "0",
             ),
@@ -186,7 +193,7 @@ class KisApiClient(
 
     override fun getBuyingPower(): BuyingPowerResponse {
         val output = call(
-            HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R",
+            HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-psbl-order", properties.tr("TTC8908R"),
             query = accountParams() + mapOf(
                 "PDNO" to "005930", "ORD_UNPR" to "", "ORD_DVSN" to "01",
                 "CMA_EVLU_AMT_ICLD_YN" to "N", "OVRS_ICLD_YN" to "N",
@@ -207,15 +214,16 @@ class KisApiClient(
             "KIS 어댑터는 LIMIT/MARKET 주문만 지원합니다"
         }
 
-        val trId = if (request.side == OrderSide.BUY) "VTTC0802U" else "VTTC0801U"
+        val trId = properties.tr(if (request.side == OrderSide.BUY) "TTC0802U" else "TTC0801U")
         val ordDvsn = if (request.orderType == OrderType.LIMIT) "00" else "01"
         // KRX 호가단위 보정 - 맞지 않는 지정가는 거래소가 거부한다
         val price = if (request.orderType == OrderType.LIMIT) KrxTick.round(request.limitPrice!!).toPlainString() else "0"
+        val code = capabilities.symbolCode(request.symbol)
 
         val output = call(
             HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-cash", trId,
             body = accountParams() + mapOf(
-                "PDNO" to request.symbol,
+                "PDNO" to code,
                 "ORD_DVSN" to ordDvsn,
                 "ORD_QTY" to request.quantity.toPlainString(),
                 "ORD_UNPR" to price,
@@ -226,7 +234,7 @@ class KisApiClient(
             orderId = output.path("ODNO").asText(),
             clientOrderId = request.clientOrderId, // KIS 미지원 — 반환만 유지
             status = OrderStatus.SUBMITTED,
-            symbol = request.symbol,
+            symbol = code, // 보유/추적과 같은 단일 시장 표기(접두 없음)
             side = request.side,
             orderType = request.orderType,
             quantity = request.quantity,
@@ -235,7 +243,7 @@ class KisApiClient(
             submittedAt = Instant.now(),
         )
 
-        trackedOrders[order.orderId] = TrackedOrder(order = order, baselineQty = holdingQty(request.symbol), date = LocalDate.now(KST))
+        trackedOrders[order.orderId] = TrackedOrder(order = order, baselineQty = holdingQty(code), date = LocalDate.now(KST))
         return order
     }
 
@@ -253,7 +261,7 @@ class KisApiClient(
     override fun cancelOrder(orderId: String): OrderResponse {
         // 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
         call(
-            HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U",
+            HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-rvsecncl", properties.tr("TTC0803U"),
             body = accountParams() + mapOf(
                 "KRX_FWDG_ORD_ORGNO" to "",
                 "ORGN_ODNO" to orderId,
@@ -293,7 +301,7 @@ class KisApiClient(
     // ---------------------------------------------------------------- internal
 
     private fun balance(): JsonNode = call(
-        HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-balance", "VTTC8434R",
+        HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-balance", properties.tr("TTC8434R"),
         query = accountParams() + mapOf(
             "AFHR_FLPR_YN" to "N", "OFL_YN" to "", "INQR_DVSN" to "02", "UNPR_DVSN" to "01",
             "FUND_STTL_ICLD_YN" to "N", "FNCG_AMT_AUTO_RDPT_YN" to "N", "PRCS_DVSN" to "00",
@@ -411,7 +419,7 @@ class KisApiClient(
     /** 모의 서버 초당 요청 제한 회피 — 호출 간 최소 간격 보장 */
     private fun throttle() {
         synchronized(throttleLock) {
-            val wait = lastCallAt + properties.throttleMillis - System.currentTimeMillis()
+            val wait = lastCallAt + properties.resolvedThrottleMillis() - System.currentTimeMillis()
             if (wait > 0) Thread.sleep(wait)
             lastCallAt = System.currentTimeMillis()
         }

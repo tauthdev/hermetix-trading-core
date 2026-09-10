@@ -28,6 +28,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from .models import (
+    symbols_match,
     Account, Candle, CandleInterval, Holding, Order, OrderType, Quote, TimeInForce,
 )
 
@@ -85,24 +86,32 @@ class StrategyContext:
     open_orders: list[Order]
     buying_power: Decimal
 
+    # 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (symbols_match)
+
     def quote(self, symbol: str) -> Quote | None:
-        return self.quotes.get(symbol)
+        return _by_symbol(self.quotes, symbol)
 
     def candles_of(self, symbol: str) -> list[Candle]:
-        return self.candles.get(symbol, [])
+        return _by_symbol(self.candles, symbol) or []
 
     def holding(self, symbol: str) -> Holding | None:
-        return self.holdings.get(symbol)
+        return _by_symbol(self.holdings, symbol)
 
     def has_position(self, symbol: str) -> bool:
-        h = self.holdings.get(symbol)
+        h = self.holding(symbol)
         return h is not None and h.quantity > 0
 
     def open_orders_of(self, symbol: str) -> list[Order]:
-        return [o for o in self.open_orders if o.symbol == symbol]
+        return [o for o in self.open_orders if o.symbol and symbols_match(o.symbol, symbol)]
 
     def has_open_order(self, symbol: str) -> bool:
         return bool(self.open_orders_of(symbol))
+
+
+def _by_symbol(mapping: dict, symbol: str):
+    if symbol in mapping:
+        return mapping[symbol]
+    return next((v for k, v in mapping.items() if symbols_match(k, symbol)), None)
 
 
 class Strategy(ABC):

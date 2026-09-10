@@ -3,7 +3,7 @@ import { Decimal } from "decimal.js";
 import type { BrokerClient } from "./broker.js";
 import { sleep } from "./broker.js";
 import { InsufficientFundsError, MarketClosedError, RateLimitError } from "./errors.js";
-import type { Holding, MarketDay, Order } from "./models.js";
+import type { Holding, MarketDay, Order, TradingEnvironment } from "./models.js";
 import { isOpenStatus } from "./models.js";
 import type { Buy, Sell, Signal, Strategy } from "./strategy.js";
 import { StrategyContext } from "./strategy.js";
@@ -88,6 +88,50 @@ export class TradingGuard {
   }
 }
 
+/**
+ * 주문 금액 상한 — 실전투자에서 봇 폭주 손실 규모를 제한한다 (모의에서도 설정하면 적용).
+ * maxOrderValue: 주문 1건 추정 금액(수량 × 지정가 또는 현재가) 상한. maxDailyOrderValue: 하루(UTC) 누적 상한(매수·매도 합산).
+ * 추정 금액을 알 수 없으면 상한이 설정된 경우 거부한다. 누적치는 메모리에만 있다.
+ */
+export class RiskGuard {
+  private day: string;
+  private dailyTotal = new Decimal(0);
+
+  constructor(
+    private readonly maxOrderValue: Decimal | null = null,
+    private readonly maxDailyOrderValue: Decimal | null = null,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    this.day = this.today();
+  }
+
+  get isActive(): boolean { return this.maxOrderValue !== null || this.maxDailyOrderValue !== null; }
+
+  /** 허용하면 일일 누적에 반영하고 null, 거부하면 사유. 누적은 제출 전에 잡는다 (보수적) */
+  tryReserve(symbol: string, quantity: Decimal, price: Decimal | null | undefined): string | null {
+    if (!this.isActive) return null;
+    if (!price || price.lte(0)) return `가격을 알 수 없어 주문 금액 상한을 검증할 수 없습니다 (symbol=${symbol})`;
+    const value = quantity.mul(price);
+    if (this.maxOrderValue && value.gt(this.maxOrderValue)) {
+      return `주문 금액 ${value} 이(가) 1건 상한 ${this.maxOrderValue} 을(를) 초과합니다 (symbol=${symbol})`;
+    }
+    this.rollDay();
+    if (this.maxDailyOrderValue && this.dailyTotal.plus(value).gt(this.maxDailyOrderValue)) {
+      return `일일 누적 주문 금액 ${this.dailyTotal.plus(value)} 이(가) 상한 ${this.maxDailyOrderValue} 을(를) 초과합니다 (오늘 누적=${this.dailyTotal})`;
+    }
+    this.dailyTotal = this.dailyTotal.plus(value);
+    return null;
+  }
+
+  getDailyTotal(): Decimal { this.rollDay(); return this.dailyTotal; }
+
+  private today(): string { return this.now().toISOString().slice(0, 10); }
+  private rollDay(): void {
+    const today = this.today();
+    if (today !== this.day) { this.day = today; this.dailyTotal = new Decimal(0); }
+  }
+}
+
 interface Bracket {
   entryOrderId: string;
   symbol: string;
@@ -168,7 +212,17 @@ export class OrderExecutor {
     private readonly broker: BrokerClient,
     private readonly brackets: BracketMonitor,
     private readonly guard: TradingGuard,
+    private readonly risk: RiskGuard = new RiskGuard(),
   ) {}
+
+  /** 추정 금액 = 수량 × (지정가 ?? 현재가). 상한을 넘으면 경고 후 false */
+  private withinRisk(strategyName: string, symbol: string, quantity: Decimal, limitPrice: Decimal | null | undefined, ctx: StrategyContext): boolean {
+    const price = limitPrice ?? ctx.quote(symbol)?.price ?? null;
+    const rejection = this.risk.tryReserve(symbol, quantity, price);
+    if (rejection === null) return true;
+    log.warn(`[${strategyName}] 주문 금액 상한으로 시그널 스킵: ${rejection}`);
+    return false;
+  }
 
   async execute(strategyName: string, signals: Signal[], ctx: StrategyContext): Promise<void> {
     for (const signal of signals) {
@@ -177,7 +231,7 @@ export class OrderExecutor {
         continue;
       }
       try {
-        if (signal.kind === "buy") await this.buy(strategyName, signal);
+        if (signal.kind === "buy") await this.buy(strategyName, signal, ctx);
         else if (signal.kind === "sell") await this.sell(strategyName, signal, ctx);
         else {
           const order = await this.broker.cancelOrder(signal.orderId);
@@ -193,7 +247,8 @@ export class OrderExecutor {
     }
   }
 
-  private async buy(strategyName: string, signal: Buy): Promise<void> {
+  private async buy(strategyName: string, signal: Buy, ctx: StrategyContext): Promise<void> {
+    if (!this.withinRisk(strategyName, signal.symbol, signal.quantity, signal.limitPrice, ctx)) return;
     const order = await this.broker.createOrder({
       symbol: signal.symbol, side: "BUY",
       orderType: signal.orderType ?? "MARKET",
@@ -214,6 +269,7 @@ export class OrderExecutor {
       log.warn(`[${strategyName}] SELL 스킵 / ${signal.symbol} 보유 수량 없음`);
       return;
     }
+    if (!this.withinRisk(strategyName, signal.symbol, qty, signal.limitPrice, ctx)) return;
     const order = await this.broker.createOrder({
       symbol: signal.symbol, side: "SELL",
       orderType: signal.orderType ?? "MARKET",
@@ -231,22 +287,48 @@ export class OrderExecutor {
   }
 }
 
+export interface EngineOptions {
+  /** 브로커가 LIVE 환경이면 true 여야 스케줄한다 (실전 명시 동의) */
+  liveTradingEnabled?: boolean;
+  /** 주문 1건 추정 금액 상한 (브로커 통화) */
+  maxOrderValue?: Decimal;
+  /** 하루(UTC) 누적 주문 금액 상한 */
+  maxDailyOrderValue?: Decimal;
+}
+
 /** 등록된 전략들을 각자의 pollInterval 로 순차 호출한다. */
 export class StrategyEngine {
   readonly guard: TradingGuard;
   readonly brackets: BracketMonitor;
   readonly executor: OrderExecutor;
   readonly calendar: MarketCalendar;
+  readonly risk: RiskGuard;
   readonly strategies: Strategy[];
   private stopped = false;
 
-  constructor(readonly broker: BrokerClient, strategies: Strategy[], maxConsecutiveFailures = 5) {
+  constructor(readonly broker: BrokerClient, strategies: Strategy[], maxConsecutiveFailures = 5, options: EngineOptions = {}) {
     this.guard = new TradingGuard(broker, maxConsecutiveFailures);
     this.brackets = new BracketMonitor(broker);
-    this.executor = new OrderExecutor(broker, this.brackets, this.guard);
+    this.risk = new RiskGuard(options.maxOrderValue ?? null, options.maxDailyOrderValue ?? null);
+    this.executor = new OrderExecutor(broker, this.brackets, this.guard, this.risk);
     this.calendar = new MarketCalendar(broker);
 
     const caps = broker.capabilities;
+    const environment: TradingEnvironment = broker.environment ?? "PAPER";
+    const supported = caps.environments ?? new Set<TradingEnvironment>(["PAPER"]);
+    if (!supported.has(environment)) {
+      log.error(`브로커 '${caps.brokerId}' 는 ${environment} 환경을 지원하지 않습니다 (지원: ${[...supported].join(",")}) - 엔진을 시작하지 않습니다`);
+      this.strategies = [];
+      return;
+    }
+    if (environment === "LIVE" && !options.liveTradingEnabled) {
+      log.error(`브로커 '${caps.brokerId}' 가 실전투자(LIVE)로 설정돼 있지만 liveTradingEnabled 가 없습니다 - 엔진을 시작하지 않습니다. 실제 돈으로 거래하려면 명시하세요.`);
+      this.strategies = [];
+      return;
+    }
+    if (environment === "LIVE") {
+      log.warn("***** 실전투자(LIVE) 모드 - 주문이 실제 계좌에서 체결됩니다. 주문 금액 상한(maxOrderValue 등) 설정을 권장합니다 *****");
+    }
     this.strategies = strategies.filter((s) => {
       const interval = s.spec.candleInterval ?? "1d";
       if (!caps.candleIntervals.has(interval)) {
@@ -257,7 +339,7 @@ export class StrategyEngine {
       }
       return true;
     });
-    log.info(`broker=${caps.brokerId} market=${caps.market} / strategies=${this.strategies.map((s) => s.spec.name).join(",")}`);
+    log.info(`broker=${caps.brokerId} environment=${environment} market=${caps.market} / strategies=${this.strategies.map((s) => s.spec.name).join(",")}`);
   }
 
   /** 블로킹 실행 루프. stop() 으로 종료. */

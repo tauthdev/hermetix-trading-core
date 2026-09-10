@@ -21,6 +21,8 @@ import (
 type KiwoomClient struct {
 	appkey, secretkey string
 	baseURL           string
+	customBaseURL     bool
+	environment       TradingEnvironment
 	http              *http.Client
 	throttle          *throttle
 	tokenMu           sync.Mutex
@@ -29,16 +31,46 @@ type KiwoomClient struct {
 	call              func(path, apiID string, jsonBody map[string]string) (map[string]any, error)
 }
 
+const (
+	KiwoomPaperURL = "https://mockapi.kiwoom.com"
+	KiwoomLiveURL  = "https://api.kiwoom.com"
+)
+
 func NewKiwoomClient(appkey, secretkey string) *KiwoomClient {
 	c := &KiwoomClient{
 		appkey: appkey, secretkey: secretkey,
-		baseURL:  "https://mockapi.kiwoom.com",
-		http:     &http.Client{Timeout: 30 * time.Second},
-		throttle: newThrottle(1100 * time.Millisecond),
+		baseURL:     KiwoomPaperURL,
+		environment: Paper,
+		http:        &http.Client{Timeout: 30 * time.Second},
+		throttle:    newThrottle(1100 * time.Millisecond),
 	}
 	c.call = c.request
 	return c
 }
+
+// SetBaseURL - 호스트를 직접 지정 (환경 자동 결정 무시).
+func (c *KiwoomClient) SetBaseURL(baseURL string) *KiwoomClient {
+	c.baseURL = baseURL
+	c.customBaseURL = true
+	return c
+}
+
+// SetEnvironment - 거래 환경 지정. 호스트(모의 mockapi / 실전 api.kiwoom.com)가 결정된다. TR ID 는 공통.
+func (c *KiwoomClient) SetEnvironment(env TradingEnvironment) *KiwoomClient {
+	c.environment = env
+	if !c.customBaseURL {
+		c.baseURL = KiwoomPaperURL
+		if env == Live {
+			c.baseURL = KiwoomLiveURL
+		}
+	}
+	return c
+}
+
+func (c *KiwoomClient) Environment() TradingEnvironment { return c.environment }
+
+// BaseURL - 현재 적용된 호스트.
+func (c *KiwoomClient) BaseURL() string { return c.baseURL }
 
 func (c *KiwoomClient) Capabilities() BrokerCapabilities {
 	return BrokerCapabilities{
@@ -48,6 +80,7 @@ func (c *KiwoomClient) Capabilities() BrokerCapabilities {
 		NativeBracket:    false,
 		FractionalShares: false,
 		ServerOpenOrders: true, // ka10075 미체결 조회 제공
+		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true},
 	}
 }
 
@@ -56,7 +89,7 @@ func (c *KiwoomClient) Capabilities() BrokerCapabilities {
 func (c *KiwoomClient) GetQuotes(symbols []string) ([]Quote, error) {
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
-		body, err := c.call("/api/dostk/stkinfo", "ka10001", map[string]string{"stk_cd": symbol})
+		body, err := c.call("/api/dostk/stkinfo", "ka10001", map[string]string{"stk_cd": SymbolCode(symbol)})
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +112,7 @@ func (c *KiwoomClient) GetCandles(symbol string, interval CandleInterval, limit 
 		return nil, fmt.Errorf("키움 어댑터는 일봉(1d)만 지원합니다")
 	}
 	body, err := c.call("/api/dostk/chart", "ka10081", map[string]string{
-		"stk_cd": symbol, "base_dt": time.Now().In(kst).Format("20060102"), "upd_stkpc_tp": "1",
+		"stk_cd": SymbolCode(symbol), "base_dt": time.Now().In(kst).Format("20060102"), "upd_stkpc_tp": "1",
 	})
 	if err != nil {
 		return nil, err
@@ -191,7 +224,7 @@ func (c *KiwoomClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 		trdeTp = "0"
 	}
 	body, err := c.call("/api/dostk/ordr", apiID, map[string]string{
-		"dmst_stex_tp": "KRX", "stk_cd": request.Symbol,
+		"dmst_stex_tp": "KRX", "stk_cd": SymbolCode(request.Symbol),
 		"ord_qty": request.Quantity.String(), "ord_uv": ordUv, "trde_tp": trdeTp, "cond_uv": "",
 	})
 	if err != nil {
@@ -201,7 +234,7 @@ func (c *KiwoomClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	zero := decimal.Zero
 	return Order{
 		OrderID: str(body["ord_no"]), Status: Submitted,
-		Symbol: request.Symbol, Side: request.Side, OrderType: request.OrderType,
+		Symbol: SymbolCode(request.Symbol), Side: request.Side, OrderType: request.OrderType,
 		Quantity: &request.Quantity, LimitPrice: request.LimitPrice,
 		FilledQuantity: &zero, SubmittedAt: &now,
 	}, nil

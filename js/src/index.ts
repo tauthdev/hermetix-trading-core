@@ -29,9 +29,9 @@
 export { Decimal } from "./models.js";
 export type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TimeInForce,
+  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TimeInForce, TradingEnvironment,
 } from "./models.js";
-export { isOpenStatus } from "./models.js";
+export { isOpenStatus, parseSymbol, symbolCode, symbolCodeFor, symbolsMatch } from "./models.js";
 export {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
   MarketClosedError, OrderNotFoundError, RateLimitError,
@@ -44,6 +44,6 @@ export { KiwoomClient } from "./brokers/kiwoom.js";
 export type { Buy, Cancel, Sell, Signal, Strategy, StrategySpec } from "./strategy.js";
 export { StrategyContext, buy, cancel, sell } from "./strategy.js";
 export {
-  BracketMonitor, MarketCalendar, OrderExecutor, StrategyEngine, TradingGuard, pnlReport,
+  BracketMonitor, MarketCalendar, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard, pnlReport,
 } from "./engine.js";
-export type { PnlReport } from "./engine.js";
+export type { EngineOptions, PnlReport } from "./engine.js";

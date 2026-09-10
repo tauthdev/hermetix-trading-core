@@ -28,7 +28,7 @@ from .broker import BrokerClient
 from .brokers.kis import KisClient
 from .brokers.kiwoom import KiwoomClient
 from .brokers.next import NextClient
-from .engine import BracketMonitor, MarketCalendar, OrderExecutor, StrategyEngine, TradingGuard, pnl_report
+from .engine import BracketMonitor, MarketCalendar, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard, pnl_report
 from .errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
     MarketClosedError, OrderNotFoundError, RateLimitError,
@@ -36,14 +36,16 @@ from .errors import (
 from .models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
     Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TimeInForce,
+    TradingEnvironment, parse_symbol, symbol_code, symbols_match,
 )
 from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, StrategySpec
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BrokerClient", "NextClient", "KisClient", "KiwoomClient",
-    "StrategyEngine", "TradingGuard", "BracketMonitor", "OrderExecutor", "MarketCalendar", "pnl_report",
+    "StrategyEngine", "TradingGuard", "BracketMonitor", "OrderExecutor", "RiskGuard", "MarketCalendar", "pnl_report",
+    "TradingEnvironment", "parse_symbol", "symbol_code", "symbols_match",
     "Strategy", "StrategySpec", "StrategyContext", "Signal", "Buy", "Sell", "Cancel",
     "Account", "BrokerCapabilities", "Candle", "CandleInterval", "CreateOrderRequest",
     "Fill", "Holding", "MarketDay", "Order", "OrderSide", "OrderStatus", "OrderType", "Quote", "TimeInForce",

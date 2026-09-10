@@ -3,6 +3,7 @@ import { Decimal } from "decimal.js";
 import type {
   Account, Candle, CandleInterval, Holding, Order, OrderType, Quote, TimeInForce,
 } from "./models.js";
+import { symbolsMatch } from "./models.js";
 
 export interface StrategySpec {
   name: string;
@@ -46,6 +47,13 @@ export const sell = (symbol: string, quantity: Decimal, opts: Partial<Omit<Sell,
 export const cancel = (orderId: string): Cancel => ({ kind: "cancel", orderId });
 
 /** 전략 호출 시점의 시장/계좌 스냅샷. */
+function bySymbol<T>(map: ReadonlyMap<string, T>, symbol: string): T | undefined {
+  const direct = map.get(symbol);
+  if (direct !== undefined) return direct;
+  for (const [key, value] of map) if (symbolsMatch(key, symbol)) return value;
+  return undefined;
+}
+
 export class StrategyContext {
   constructor(
     public readonly now: Date,
@@ -57,14 +65,17 @@ export class StrategyContext {
     public readonly buyingPower: Decimal,
   ) {}
 
-  quote(symbol: string): Quote | undefined { return this.quotes.get(symbol); }
-  candlesOf(symbol: string): Candle[] { return this.candles.get(symbol) ?? []; }
-  holding(symbol: string): Holding | undefined { return this.holdings.get(symbol); }
+  // 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (symbolsMatch)
+  quote(symbol: string): Quote | undefined { return bySymbol(this.quotes, symbol); }
+  candlesOf(symbol: string): Candle[] { return bySymbol(this.candles, symbol) ?? []; }
+  holding(symbol: string): Holding | undefined { return bySymbol(this.holdings, symbol); }
   hasPosition(symbol: string): boolean {
-    const h = this.holdings.get(symbol);
+    const h = this.holding(symbol);
     return h !== undefined && h.quantity.gt(0);
   }
-  openOrdersOf(symbol: string): Order[] { return this.openOrders.filter((o) => o.symbol === symbol); }
+  openOrdersOf(symbol: string): Order[] {
+    return this.openOrders.filter((o) => o.symbol != null && symbolsMatch(o.symbol, symbol));
+  }
   hasOpenOrder(symbol: string): boolean { return this.openOrdersOf(symbol).length > 0; }
 }
 

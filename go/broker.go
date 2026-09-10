@@ -19,6 +19,8 @@ import (
 //   - 응답의 방언(부호 접두, zero-padding 등)은 어댑터가 정규화한다
 type BrokerClient interface {
 	Capabilities() BrokerCapabilities
+	// Environment - 이 인스턴스가 연결된 거래 환경. 엔진은 Live 면 명시 동의(LiveTradingEnabled)를 요구한다
+	Environment() TradingEnvironment
 	GetQuotes(symbols []string) ([]Quote, error)
 	GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error)
 	GetCalendar() ([]MarketDay, error)

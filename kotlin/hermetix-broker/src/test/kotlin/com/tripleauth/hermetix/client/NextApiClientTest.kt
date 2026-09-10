@@ -7,6 +7,7 @@ import com.fasterxml.jackson.module.kotlin.kotlinModule
 import com.tripleauth.hermetix.broker.AuthError
 import com.tripleauth.hermetix.broker.BrokerApiException
 import com.tripleauth.hermetix.broker.InsufficientFundsError
+import com.tripleauth.hermetix.broker.TradingEnvironment
 import com.tripleauth.hermetix.client.dto.CandleInterval
 import com.tripleauth.hermetix.client.dto.CreateOrderRequest
 import com.tripleauth.hermetix.client.dto.OrderSide
@@ -40,8 +41,8 @@ class NextApiClientTest {
         server.start()
         val properties = NextApiProperties(
             baseUrl = server.url("/").toString().removeSuffix("/"),
-            clientId = "pk_test",
-            clientSecret = "sk_test",
+            clientId = "pk_test_demo",
+            clientSecret = "sk_test_demo",
             accountId = "acc_main",
         )
         client = NextApiClient(properties, TokenManager(properties, objectMapper), objectMapper)
@@ -292,6 +293,43 @@ class NextApiClientTest {
         assertThat(fills[0].side).isEqualTo(OrderSide.BUY)
         assertThat(fills[0].amount).isEqualByComparingTo(BigDecimal("199.5"))
         assertThat(fills[0].timestamp).isEqualTo(Instant.parse("2026-09-10T14:11:00Z"))
+    }
+
+    // ------------------------------------------------------------- environment
+
+    @Test
+    fun `환경 설정과 키 프리픽스가 어긋나면 기동 실패`() {
+        val live = NextApiProperties(environment = TradingEnvironment.LIVE, clientId = "pk_test_demo", clientSecret = "x")
+        assertThatThrownBy { NextApiClient(live, TokenManager(live, objectMapper), objectMapper) }
+            .isInstanceOf(IllegalStateException::class.java)
+            .hasMessageContaining("pk_live_")
+
+        val paper = NextApiProperties(environment = TradingEnvironment.PAPER, clientId = "pk_live_real", clientSecret = "x")
+        assertThatThrownBy { NextApiClient(paper, TokenManager(paper, objectMapper), objectMapper) }
+            .isInstanceOf(IllegalStateException::class.java)
+            .hasMessageContaining("pk_test_")
+
+        val ok = NextApiProperties(environment = TradingEnvironment.LIVE, clientId = "pk_live_real", clientSecret = "x")
+        assertThat(NextApiClient(ok, TokenManager(ok, objectMapper), objectMapper).environment).isEqualTo(TradingEnvironment.LIVE)
+        assertThat(client.capabilities.environments).containsExactlyInAnyOrder(TradingEnvironment.PAPER, TradingEnvironment.LIVE)
+    }
+
+    @Test
+    fun `시장 접두 심볼은 코드만 보내고 응답은 요청 표기로 돌려준다`() {
+        enqueueToken()
+        server.enqueue(
+            json(
+                """{"quotes":[{"symbol":"AAPL","outcome":"OK","session":"REGULAR","requestedAt":"2026-09-10T23:10:00+09:00",
+                    "price":"308.91","volume":"1","lastTradeAt":"2026-09-10T23:09:58+09:00"}]}""",
+            ),
+        )
+
+        val response = client.getQuotes(listOf("US:AAPL"))
+
+        assertThat(response.quotes[0].symbol).isEqualTo("US:AAPL")
+        server.takeRequest() // token
+        assertThat(server.takeRequest().path).isEqualTo("/v1/market/quotes?symbols=AAPL")
+        assertThatThrownBy { client.getQuotes(listOf("KRX:005930")) }.isInstanceOf(IllegalArgumentException::class.java)
     }
 
     // ------------------------------------------------------------------ errors

@@ -21,6 +21,7 @@ from decimal import Decimal
 from ..broker import KST, BrokerClient, Throttle, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
+    TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
     Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote,
 )
@@ -58,18 +59,32 @@ class KisClient(BrokerClient):
         native_bracket=False,
         fractional_shares=False,
         server_open_orders=False,  # 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
+        environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
     )
 
+    def _tr(self, suffix: str) -> str:
+        """계좌 TR ID — 모의 V, 실전 T 프리픽스 (예: _tr("TTC0802U") → VTTC0802U / TTTC0802U)"""
+        return ("T" if self.environment == TradingEnvironment.LIVE else "V") + suffix
+
+    PAPER_URL = "https://openapivts.koreainvestment.com:29443"
+    LIVE_URL = "https://openapi.koreainvestment.com:9443"
+
     def __init__(self, appkey: str, appsecret: str, cano: str, acnt_prdt_cd: str = "01",
-                 custtype: str = "P", base_url: str = "https://openapivts.koreainvestment.com:29443",
-                 throttle_seconds: float = 0.6):
+                 custtype: str = "P", base_url: str = "",
+                 throttle_seconds: float = 0.0,
+                 environment: TradingEnvironment = TradingEnvironment.PAPER):
+        """base_url 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
+        throttle_seconds 0 이면 자동 — 모의 0.6(초당 2건), 실전 0.1(초당 20건 한도의 절반).
+        계좌 TR ID 는 모의 V / 실전 T 프리픽스."""
+        self.environment = environment
         self._appkey = appkey
         self._appsecret = appsecret
         self._cano = cano
         self._acnt_prdt_cd = acnt_prdt_cd
         self._custtype = custtype
-        self._http = _Http(base_url)
-        self._throttle = Throttle(throttle_seconds)
+        live = environment == TradingEnvironment.LIVE
+        self._http = _Http(base_url or (self.LIVE_URL if live else self.PAPER_URL))
+        self._throttle = Throttle(throttle_seconds or (0.1 if live else 0.6))
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = threading.Lock()
@@ -81,7 +96,8 @@ class KisClient(BrokerClient):
         quotes = []
         for symbol in symbols:
             out = self._call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
-                             query={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol})["output"]
+                             query={"FID_COND_MRKT_DIV_CODE": "J",
+                                    "FID_INPUT_ISCD": self.capabilities.symbol_code(symbol)})["output"]
             rate = _d_or_none(out.get("prdy_ctrt"))
             quotes.append(Quote(
                 symbol=symbol,
@@ -103,7 +119,7 @@ class KisClient(BrokerClient):
         start = today - timedelta(days=count * 16 // 10 + 10)  # 휴장일 감안 여유 조회
 
         rows = self._call("GET", "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", "FHKST03010100",
-                          query={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol,
+                          query={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": self.capabilities.symbol_code(symbol),
                                  "FID_INPUT_DATE_1": start.strftime("%Y%m%d"),
                                  "FID_INPUT_DATE_2": today.strftime("%Y%m%d"),
                                  "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"})["output2"]
@@ -156,7 +172,7 @@ class KisClient(BrokerClient):
         return holdings
 
     def get_buying_power(self) -> Decimal:
-        out = self._call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R",
+        out = self._call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-order", self._tr("TTC8908R"),
                          query={**self._acct(), "PDNO": "005930", "ORD_UNPR": "", "ORD_DVSN": "01",
                                 "CMA_EVLU_AMT_ICLD_YN": "N", "OVRS_ICLD_YN": "N"})["output"]
         return _d(out.get("ord_psbl_cash"))
@@ -164,10 +180,11 @@ class KisClient(BrokerClient):
     # ------------------------------------------------------------------ orders
 
     def create_order(self, request: CreateOrderRequest) -> Order:
-        tr_id = "VTTC0802U" if request.side == OrderSide.BUY else "VTTC0801U"
+        tr_id = self._tr("TTC0802U" if request.side == OrderSide.BUY else "TTC0801U")
+        code = self.capabilities.symbol_code(request.symbol)
         is_limit = request.order_type.value == "LIMIT"
         out = self._call("POST", "/uapi/domestic-stock/v1/trading/order-cash", tr_id,
-                         body={**self._acct(), "PDNO": request.symbol,
+                         body={**self._acct(), "PDNO": code,
                                "ORD_DVSN": "00" if is_limit else "01",
                                "ORD_QTY": str(request.quantity),
                                "ORD_UNPR": str(krx_tick_round(request.limit_price)) if is_limit else "0"})["output"]
@@ -175,7 +192,7 @@ class KisClient(BrokerClient):
         order = Order(
             order_id=out["ODNO"],
             status=OrderStatus.SUBMITTED,
-            symbol=request.symbol,
+            symbol=code,  # 보유/추적과 같은 단일 시장 표기(접두 없음)
             side=request.side,
             order_type=request.order_type,
             quantity=request.quantity,
@@ -184,7 +201,7 @@ class KisClient(BrokerClient):
             submitted_at=datetime.now(timezone.utc),
         )
         self._tracked[order.order_id] = _Tracked(
-            order=order, baseline_qty=self._holding_qty(request.symbol), day=datetime.now(KST).date())
+            order=order, baseline_qty=self._holding_qty(code), day=datetime.now(KST).date())
         return order
 
     def get_orders(self) -> list[Order]:
@@ -201,7 +218,7 @@ class KisClient(BrokerClient):
 
     def cancel_order(self, order_id: str) -> Order:
         # 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
-        self._call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0803U",
+        self._call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", self._tr("TTC0803U"),
                    body={**self._acct(), "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": order_id,
                          "ORD_DVSN": "00", "RVSE_CNCL_DVSN_CD": "02",
                          "ORD_QTY": "0", "ORD_UNPR": "0", "QTY_ALL_ORD_YN": "Y"})
@@ -251,7 +268,7 @@ class KisClient(BrokerClient):
         return Decimal(0)
 
     def _balance(self) -> dict:
-        return self._call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", "VTTC8434R",
+        return self._call("GET", "/uapi/domestic-stock/v1/trading/inquire-balance", self._tr("TTC8434R"),
                           query={**self._acct(), "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02",
                                  "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N",
                                  "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""})

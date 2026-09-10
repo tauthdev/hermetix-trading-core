@@ -40,12 +40,14 @@ override val spec = StrategySpec(
 | 필드/메서드 | 내용 | 비고 |
 |---|---|---|
 | `now` | 엔진 기준 현재 시각 | 테스트 주입 가능하도록 `ZonedDateTime.now()` 대신 이걸 쓰세요 |
-| `quote(symbol)` | 현재가 스냅샷 | `price`, `bidPrice`/`askPrice`(장 마감 시 null), 당일 누적 `volume` |
+| `quote(symbol)` | 현재가 스냅샷 | `price`, `bidPrice`/`askPrice`(장 마감 시 null), 당일 누적 `volume`. 시세가 없는 종목(넥스트 `NOT_FOUND`/`NO_DATA`)은 null |
 | `candles(symbol)` | 캔들 리스트 (과거→최신) | **마지막 캔들은 진행 중**(미완성)입니다. 완성 캔들 기준 전략은 `dropLast(1)` 하세요 |
 | `holding(symbol)` / `hasPosition(symbol)` | 보유 포지션 | `avgEntryPrice` 는 계좌 전체 평균 매입 단가 |
 | `openOrders(symbol)` / `hasOpenOrder(symbol)` | 미체결 주문 | 취소하려면 `orderId` 를 `Signal.Cancel` 로 |
 | `buyingPower` | 주문 가능 현금 | 수량 계산의 기준 |
 | `account` | 계좌 정보 | `cash`, `portfolioValue` |
+
+심볼 조회 메서드(`quote`/`candles`/`holding`/`hasPosition`/`openOrders`)는 `MARKET:CODE` 접두 유무를 무시하고 코드로 맞춥니다. `KRX:005930` 으로 감시하면서 서버가 `005930` 으로 주는 보유/미체결을 그대로 찾을 수 있습니다.
 
 ## 4. Signal — 의사결정 표현
 
@@ -88,7 +90,9 @@ Signal.Cancel(orderId = order.orderId)
 ## 5. 안전장치
 
 - **비상정지(TradingGuard)**: 틱 처리 중 연속 실패가 `hermetix.engine.max-consecutive-failures`(기본 5)에 도달하면 미체결 전량 취소 후 모든 주문이 차단됩니다. 해제는 `TradingGuard.resume()` (빈 주입 후 호출) 또는 앱 재시작
-- **clientOrderId 멱등성**: 모든 주문에 `{전략이름}-{uuid}` 가 부여되어 24시간 내 중복 제출이 방지됩니다
+- **주문 금액 상한(RiskGuard)**: `hermetix.risk.max-order-value`(1건) / `max-daily-order-value`(하루 UTC 누적, 매수·매도 합산)를 넘는 시그널은 제출되지 않고 경고 로그만 남습니다. 추정 금액은 수량 × (지정가 또는 현재가)이며, 현재가를 모르면 상한이 설정된 경우 거부합니다. 누적치는 메모리에만 있습니다
+- **실전 게이트**: 브로커가 `environment: live` 면 `hermetix.live.enabled=true` 가 없는 한 엔진이 전략을 스케줄하지 않습니다. 실전 전환 시 상한 설정을 함께 권장합니다
+- **clientOrderId 멱등성**: 지원 브로커(next)에서 모든 주문에 `{전략이름}-{uuid}` 가 부여되어 24시간 내 중복 제출이 방지됩니다
 - **주의 — 여러 전략이 같은 심볼을 다루면 안 됩니다.** 보유/미체결 판단이 심볼 단위라 서로의 포지션을 침범합니다. 전략마다 다른 종목을 배정하세요
 
 ## 6. 자주 쓰는 패턴
