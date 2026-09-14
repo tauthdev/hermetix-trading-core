@@ -56,7 +56,8 @@
 ```
 
 - `frames` 는 브로커가 보내는 텍스트 프레임 그대로 (키움은 JSON 을 문자열로), `time` 은 거래소 현지(KST) `HH:mm:ss`, 숫자는 문자열
-- 두 브로커의 프레임은 2026-09-14 모의 웹소켓 장중 실측에서 받은 것을 그대로 넣었습니다 (KIS 는 한 프레임에 여러 레코드가 이어 붙는 실제 형태)
+- `measured` 플래그: kis·kiwoom 의 체결가(`frames`)와 `orderBook` 은 2026-09-14 모의 웹소켓 장중 실측 프레임 그대로(KIS 는 한 프레임에 여러 레코드가 이어 붙는 실제 형태). kis·kiwoom 의 `orderEvents` 와 nh·db·ls·toss 의 전 섹션은 **공식 문서·SDK·AsyncAPI 예시에서 재구성한 값**이라 `"measured": false` 로 표시합니다 — 실측 제보가 오면 실제 프레임으로 교체하고 `true` 로 올립니다
+- 각 섹션은 `frames`(브로커 원시 텍스트 프레임)와 `expected`(언어 중립 값)로 구성되며 `orderBook`(asks/bids 가격·잔량·총잔량)·`orderEvents`(orderId·type·side·수량·가격·잔량·원주문) 하위 섹션이 같은 규칙을 따릅니다. next·kb 는 웹소켓이 없어 `stream` 섹션이 없습니다
 
 ## 새 어댑터 추가 절차
 
