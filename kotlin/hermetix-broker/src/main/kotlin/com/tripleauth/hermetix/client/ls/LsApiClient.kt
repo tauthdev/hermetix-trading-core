@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.tripleauth.hermetix.broker.AuthError
 import com.tripleauth.hermetix.broker.BrokerApiException
 import com.tripleauth.hermetix.broker.BrokerCapabilities
-import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.InsufficientFundsError
 import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.KrxCalendar
@@ -65,7 +67,7 @@ import java.time.format.DateTimeFormatter
 class LsApiClient(
     private val properties: LsApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -79,6 +81,8 @@ class LsApiClient(
         fractionalShares = false,
         serverOpenOrders = true, // t0425 미체결 조회
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
+        // 웹소켓 체결(S3_/K3_)·호가(H1_/HA_)·주문 통보(SC0~SC4) — 문서 기반, 실측 전
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -351,6 +355,11 @@ class LsApiClient(
                 }
                 node
             }!!
+
+    // ------------------------------------------------------------------ stream
+
+    /** 실시간 스트림 — 매 메시지 헤더에 REST 토큰을 싣는다 (재접속 시 캐시/재발급 토큰) */
+    override fun openStream(): MarketStream = LsMarketStream(properties, objectMapper, ::token)
 
     private fun token(): String {
         val cached = cachedToken

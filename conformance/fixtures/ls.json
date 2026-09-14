@@ -40,5 +40,34 @@
         "t0425OutBlock1": [
           { "ordno": 1234, "expcode": "A005930", "medosu": "매수", "qty": 1, "price": 70000, "cheqty": 0, "cheprice": 0, "ordrem": 1, "cfmqty": 0, "status": "접수", "orgordno": 0, "ordgb": "현금매수", "ordtime": "09150000", "hogagb": "00", "price1": 70000 },
           { "ordno": 1100, "expcode": "A005930", "medosu": "매수", "qty": 2, "price": 69000, "cheqty": 2, "cheprice": 69000, "ordrem": 0, "cfmqty": 2, "status": "체결", "orgordno": 0, "ordgb": "현금매수", "ordtime": "09050000", "hogagb": "00", "price1": 70000 } ] } }
-  ]
+  ],
+  "stream": {
+    "description": "LS증권 웹소켓 — 문서 기반 재구성값(실측 전). 포털 실시간 TR 예시(S3_/K3_ 체결, H1_/HA_ 호가, SC0~SC4 주문)를 그대로 옮겼고 호가만 1호가 예시를 10단계로 확장. 매 메시지 header.token, 시세 tr_type 3/4, 계좌 tr_type 1/2. 값은 전부 문자열, change 는 부호 없음(sign 4·5 하락), drate 는 부호 있는 %. 종목마다 KOSPI·KOSDAQ TR 을 둘 다 등록한다",
+    "channel": "TRADES",
+    "measured": false,
+    "subscribe": { "header": { "token": "ACCESS_TOKEN", "tr_type": "3" }, "body": { "tr_cd": "S3_", "tr_key": "005930" } },
+    "frames": [ "{\"header\":{\"tr_cd\":\"S3_\",\"tr_key\":\"005930\"},\"body\":{\"mdchecnt\":\"23\",\"sign\":\"2\",\"mschecnt\":\"96\",\"mdvolume\":\"946\",\"w_avrg\":\"55448\",\"cpower\":\"332.56\",\"offerho\":\"55600\",\"cvolume\":\"1\",\"high\":\"55800\",\"bidho\":\"55500\",\"low\":\"55500\",\"price\":\"55550\",\"cgubun\":\"+\",\"value\":\"604\",\"change\":\"1050\",\"shcode\":\"005930\",\"chetime\":\"090851\",\"opentime\":\"090030\",\"lowtime\":\"090030\",\"volume\":\"10887\",\"drate\":\"1.93\",\"hightime\":\"090504\",\"jnilvolume\":\"2508350\",\"msvolume\":\"3146\",\"exchname\":\"KRX\",\"open\":\"55600\",\"status\":\"00\"}}" ],
+    "expected": [
+      { "symbol": "005930", "price": "55550", "quantity": "1", "time": "09:08:51", "askPrice": "55600", "bidPrice": "55500",
+        "cumulativeVolume": 10887, "change": "1050", "changeRate": "0.0193" }
+    ],
+    "orderBook": {
+      "description": "H1_/HA_ 호가잔량 — 포털 예시(08:42:42, 1호가 72400/72300, 잔량 32616/70581)를 10단계로 확장한 재구성값",
+      "channel": "ORDER_BOOK",
+      "measured": false,
+      "frames": [ "{\"header\":{\"tr_cd\":\"H1_\",\"tr_key\":\"005930\"},\"body\":{\"hotime\":\"084242\",\"shcode\":\"005930\",\"donsigubun\":\"3\",\"totofferrem\":\"400000\",\"totbidrem\":\"500000\",\"volume\":\"136\",\"alloc_gubun\":\"\",\"offerho1\":\"72400\",\"offerrem1\":\"32616\",\"bidho1\":\"72300\",\"bidrem1\":\"70581\",\"offerho2\":\"72500\",\"offerrem2\":\"33616\",\"bidho2\":\"72200\",\"bidrem2\":\"71581\",\"offerho3\":\"72600\",\"offerrem3\":\"34616\",\"bidho3\":\"72100\",\"bidrem3\":\"72581\",\"offerho4\":\"72700\",\"offerrem4\":\"35616\",\"bidho4\":\"72000\",\"bidrem4\":\"73581\",\"offerho5\":\"72800\",\"offerrem5\":\"36616\",\"bidho5\":\"71900\",\"bidrem5\":\"74581\",\"offerho6\":\"72900\",\"offerrem6\":\"37616\",\"bidho6\":\"71800\",\"bidrem6\":\"75581\",\"offerho7\":\"73000\",\"offerrem7\":\"38616\",\"bidho7\":\"71700\",\"bidrem7\":\"76581\",\"offerho8\":\"73100\",\"offerrem8\":\"39616\",\"bidho8\":\"71600\",\"bidrem8\":\"77581\",\"offerho9\":\"73200\",\"offerrem9\":\"40616\",\"bidho9\":\"71500\",\"bidrem9\":\"78581\",\"offerho10\":\"73300\",\"offerrem10\":\"41616\",\"bidho10\":\"71400\",\"bidrem10\":\"79581\"}}" ],
+      "expected": [ {"symbol": "005930", "time": "08:42:42", "asks": [{"price": "72400", "quantity": "32616"}, {"price": "72500", "quantity": "33616"}, {"price": "72600", "quantity": "34616"}, {"price": "72700", "quantity": "35616"}, {"price": "72800", "quantity": "36616"}, {"price": "72900", "quantity": "37616"}, {"price": "73000", "quantity": "38616"}, {"price": "73100", "quantity": "39616"}, {"price": "73200", "quantity": "40616"}, {"price": "73300", "quantity": "41616"}], "bids": [{"price": "72300", "quantity": "70581"}, {"price": "72200", "quantity": "71581"}, {"price": "72100", "quantity": "72581"}, {"price": "72000", "quantity": "73581"}, {"price": "71900", "quantity": "74581"}, {"price": "71800", "quantity": "75581"}, {"price": "71700", "quantity": "76581"}, {"price": "71600", "quantity": "77581"}, {"price": "71500", "quantity": "78581"}, {"price": "71400", "quantity": "79581"}], "totalAskQuantity": "400000", "totalBidQuantity": "500000"} ]
+    },
+    "orderEvents": {
+      "description": "SC0 접수 / SC1 체결 / SC3 취소 — 포털 예시의 업무 필드 발췌. 계좌 등록은 tr_type 1, tr_key 빈 문자열, TR 마다 따로. SC4 거부 본문은 포털에 필드표가 없어 SC1 레이아웃으로 가정(rjtqty·msgcode)",
+      "channel": "ORDER_EVENTS",
+      "measured": false,
+      "frames": [ "{\"header\":{\"tr_cd\":\"SC0\"},\"body\":{\"ordchegb\":\"01\",\"marketgb\":\"10\",\"ordgb\":\"02\",\"orgordno\":\"0\",\"accno\":\"20011132702\",\"expcode\":\"KR7005930003\",\"shtcode\":\"A005930\",\"hname\":\"삼성전자\",\"ordqty\":\"2\",\"ordprice\":\"60000\",\"hogagb\":\"0\",\"etfhogagb\":\"00\",\"ordno\":\"86382\",\"ordtm\":\"095636020\",\"prntordno\":\"86382\",\"ordamt\":\"120000\",\"bnstp\":\"2\",\"trcode\":\"SONAT000\",\"msgcode\":\"0040\"}}", "{\"header\":{\"tr_cd\":\"SC1\"},\"body\":{\"ordxctptncode\":\"11\",\"ordno\":\"86382\",\"orgordno\":\"0\",\"execno\":\"1\",\"shtnIsuno\":\"A005930\",\"Isuno\":\"KR7005930003\",\"Isunm\":\"삼성전자\",\"bnstp\":\"2\",\"ordqty\":\"2\",\"ordprc\":\"60000\",\"execqty\":\"1\",\"execprc\":\"60000\",\"ordavrexecprc\":\"60000\",\"unercqty\":\"1\",\"mdfycnfqty\":\"0\",\"mdfycnfprc\":\"0\",\"canccnfqty\":\"0\",\"rjtqty\":\"0\",\"exectime\":\"095636107\",\"rcptexectime\":\"095636098\",\"ordprcptncode\":\"00\",\"trcode\":\"SONAS100\",\"msgcode\":\"9999\"}}", "{\"header\":{\"tr_cd\":\"SC3\"},\"body\":{\"ordxctptncode\":\"13\",\"ordno\":\"88343\",\"orgordno\":\"88342\",\"execno\":\"0\",\"shtnIsuno\":\"A000020\",\"bnstp\":\"2\",\"ordqty\":\"1\",\"ordprc\":\"0\",\"execqty\":\"0\",\"execprc\":\"0\",\"unercqty\":\"0\",\"mdfycnfqty\":\"0\",\"mdfycnfprc\":\"0\",\"canccnfqty\":\"1\",\"rjtqty\":\"0\",\"orgordunercqty\":\"5\",\"orgordcancqty\":\"1\",\"exectime\":\"150622765\",\"trcode\":\"SONAS100\",\"msgcode\":\"9999\"}}" ],
+      "expected": [
+        { "orderId": "86382", "type": "ACCEPTED", "time": "09:56:36", "symbol": "005930", "side": "BUY", "quantity": "2", "price": "60000" },
+        { "orderId": "86382", "type": "FILLED", "time": "09:56:36", "symbol": "005930", "side": "BUY", "quantity": "1", "price": "60000", "remainingQuantity": "1" },
+        { "orderId": "88343", "type": "CANCELED", "time": "15:06:22", "symbol": "000020", "side": "BUY", "quantity": "1", "price": "0", "remainingQuantity": "0", "originalOrderId": "88342" }
+      ]
+    }
+  }
 }
