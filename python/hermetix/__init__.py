@@ -48,7 +48,7 @@ from .models import (
 )
 from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, StrategySpec, TickTrigger
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "BrokerClient", "RateLimiter", "MarketStream", "StreamingBrokerClient", "TradeListener", "NextClient", "KisClient", "KiwoomClient", "NhClient", "DbClient",

@@ -1,6 +1,6 @@
 # Hermetix JavaScript/TypeScript
 
-증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 22+). 버전 0.8.0
+증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 22+). 버전 0.9.0
 
 의존성은 `decimal.js` 하나입니다 — JS 의 부동소수점(0.1+0.2≠0.3)으로 돈을 계산하지 않기 위한 필수 선택. **금액에 number 를 절대 섞지 마세요.** 실시간 웹소켓은 Node 22 내장 `WebSocket` 을 써서 추가 의존성이 없습니다.
 
