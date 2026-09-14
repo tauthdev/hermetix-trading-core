@@ -9,7 +9,9 @@ import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
-import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.broker.TradingEnvironment
@@ -66,7 +68,7 @@ import java.time.format.DateTimeFormatter
 class KisApiClient(
     private val properties: KisApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -80,6 +82,7 @@ class KisApiClient(
         fractionalShares = false,
         serverOpenOrders = false, // 모의 서버가 주문 조회를 제공하지 않음 - 어댑터 내부 추적
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
+        streams = setOf(StreamChannel.TRADES), // H0STCNT0 체결가 — 문서 기반, 모의 실측 전
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -401,6 +404,34 @@ class KisApiClient(
             }!!
 
         return response
+    }
+
+    // ------------------------------------------------------------------ stream
+
+    override fun openStream(): MarketStream = KisMarketStream(properties, objectMapper, ::approvalKey)
+
+    /**
+     * 웹소켓 접속키 (`POST /oauth2/Approval`). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고
+     * 문서상 유효기간이 명시돼 있지 않다. 필드명이 REST 토큰(`appsecret`)과 달리 `secretkey` 인 점에 주의.
+     */
+    internal fun approvalKey(): String {
+        limiter.throttle()
+        val node = restClient.post()
+            .uri("/oauth2/Approval")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(
+                objectMapper.writeValueAsString(
+                    mapOf("grant_type" to "client_credentials", "appkey" to properties.appkey, "secretkey" to properties.appsecret),
+                ),
+            )
+            .exchange { _, res ->
+                val n = objectMapper.readTree(res.body.readAllBytes())
+                if (!res.statusCode.is2xxSuccessful || !n.hasNonNull("approval_key")) {
+                    throw AuthError(res.statusCode.value(), n.path("error_code").asText(null), "KIS 웹소켓 접속키 발급 실패: ${n.path("error_description").asText("")}")
+                }
+                n
+            }!!
+        return node.path("approval_key").asText()
     }
 
     private fun token(): String {

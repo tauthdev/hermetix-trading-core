@@ -37,4 +37,9 @@ data class BrokerCapabilities(
     val environments: Set<TradingEnvironment> = setOf(TradingEnvironment.PAPER),
     /** 한 계좌로 다룰 수 있는 시장 목록 (`MARKET:CODE` 심볼 접두의 허용 값). 기본은 [market] 하나 */
     val markets: Set<String> = setOf(market),
+    /**
+     * 실시간 스트림 채널. 비어있으면 폴링만 가능하다.
+     * 선언한 어댑터는 [StreamingBrokerClient] 를 구현해야 한다 — 엔진은 둘 다 확인한다.
+     */
+    val streams: Set<StreamChannel> = emptySet(),
 )

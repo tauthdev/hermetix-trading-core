@@ -15,8 +15,12 @@ data class StrategySpec(
     val candleInterval: CandleInterval = CandleInterval.DAY_1,
     /** 전략에 공급할 캔들 개수 */
     val candleLimit: Int = 30,
-    /** 전략 호출 주기 */
+    /** 전략 호출 주기 ([TickTrigger.ON_TRADE] 에서는 스트림이 끊겼을 때의 안전망 주기) */
     val pollInterval: Duration = Duration.ofSeconds(60),
     /** true 면 정규장 시간에만 전략을 호출한다 */
     val regularHoursOnly: Boolean = true,
+    /** 전략 호출을 촉발하는 것 — 주기 폴링 또는 체결가 스트림 */
+    val trigger: TickTrigger = TickTrigger.POLL,
+    /** [TickTrigger.ON_TRADE] 에서 연속 호출 사이의 최소 간격. REST 호출(캔들·계좌) 폭주를 막는다 */
+    val minTickInterval: Duration = Duration.ofSeconds(1),
 )

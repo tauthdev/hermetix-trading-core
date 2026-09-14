@@ -31,5 +31,17 @@
       "body": { "rt_cd": "0", "msg_cd": "APBK0013", "msg1": "주문 전송 완료 되었습니다.", "output": { "KRX_FWDG_ORD_ORGNO": "00950", "ODNO": "0001235", "ORD_TMD": "091500" } } },
     { "header": ["tr_id", "VTTC0803U"],
       "body": { "rt_cd": "0", "msg_cd": "APBK0013", "msg1": "주문 전송 완료 되었습니다.", "output": { "KRX_FWDG_ORD_ORGNO": "00950", "ODNO": "0001236", "ORD_TMD": "091600" } } }
-  ]
+  ],
+  "stream": {
+    "description": "KIS 웹소켓 체결가 H0STCNT0 — 문서 기반 프레임 (실측 전). 시각은 KST HHMMSS, 대비는 부호코드(3번째 필드)+무부호 값, 대비율은 %",
+    "channel": "TRADES",
+    "subscribe": { "tr_id": "H0STCNT0", "tr_key": "005930" },
+    "frames": [
+      "0|H0STCNT0|001|005930^093012^71500^5^300^-0.42^71480^71800^71900^71300^71500^71400^15^1234567^88000000000^1200^1300^100^105.2^600000"
+    ],
+    "expected": [
+      { "symbol": "005930", "price": "71500", "quantity": "15", "time": "09:30:12", "askPrice": "71500", "bidPrice": "71400",
+        "cumulativeVolume": 1234567, "change": "-300", "changeRate": "-0.0042" }
+    ]
+  }
 }

@@ -1,24 +1,38 @@
 package com.tripleauth.hermetix.engine
 
 import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
+import com.tripleauth.hermetix.broker.TradeTick
 import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.TradingEnvironment
 import com.tripleauth.hermetix.market.MarketCalendarService
+import com.tripleauth.hermetix.client.dto.Quote
 import com.tripleauth.hermetix.strategy.StrategyContext
+import com.tripleauth.hermetix.strategy.StrategySpec
+import com.tripleauth.hermetix.strategy.TickTrigger
 import com.tripleauth.hermetix.strategy.TradingStrategy
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler
+import java.time.Instant
 import java.time.ZonedDateTime
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 전략 실행 엔진.
  *
  * 등록된 모든 [TradingStrategy] 빈을 각자의 pollInterval 주기로 호출한다.
  * 매 틱: 장시간 확인 → 시장/계좌 스냅샷 구성 → 브라켓 점검 → 전략 호출 → 시그널 실행.
+ *
+ * 실시간 트리거([TickTrigger.ON_TRADE]): 브로커가 [StreamingBrokerClient] 이고 TRADES 채널을 선언하면
+ * 전략 심볼의 체결가 스트림을 구독하고, 틱마다 같은 단일 스레드 스케줄러에 tick 을 넣는다.
+ * 대기 중인 틱이 있으면 합치고([pendingTicks]), 직전 틱 종료 후 minTickInterval 이 지나야 다음을 돌린다.
+ * 스트림 틱이 모든 심볼을 덮으면 quotes REST 호출 대신 마지막 틱을 현재가로 쓴다.
  *
  * 실전(LIVE) 게이트: 브로커가 LIVE 환경이면 [liveTradingEnabled] 가 true 일 때만 스케줄한다.
  */
@@ -44,6 +58,22 @@ class StrategyEngine(
         setThreadNamePrefix("strategy-engine-")
         initialize()
     }
+
+    /** 체결가 스트림 (ON_TRADE 전략이 하나라도 있고 브로커가 지원할 때만 연다) */
+    @Volatile
+    private var stream: MarketStream? = null
+
+    /** 심볼(요청 표기) → 마지막 체결 틱 */
+    private val latestTrades = ConcurrentHashMap<String, TradeTick>()
+
+    /** 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용) */
+    private val pendingTicks = ConcurrentHashMap<String, Boolean>()
+
+    /** 전략 이름 → 직전 tick 종료 시각 (epoch ms) */
+    private val lastTickEndedAt = ConcurrentHashMap<String, Long>()
+
+    /** 스트림이 열려 있고 로그인까지 끝났는지 — 상태 확인용 */
+    val streamConnected: Boolean get() = stream?.isConnected == true
 
     @EventListener(ApplicationReadyEvent::class)
     fun start() {
@@ -83,12 +113,61 @@ class StrategyEngine(
                 return@forEach
             }
 
-            logger.info { "strategy scheduled / ${strategy.spec.name} symbols=${strategy.spec.symbols} interval=${strategy.spec.pollInterval}" }
+            logger.info { "strategy scheduled / ${strategy.spec.name} symbols=${strategy.spec.symbols} interval=${strategy.spec.pollInterval} trigger=${strategy.spec.trigger}" }
             scheduler.scheduleWithFixedDelay({ tick(strategy) }, strategy.spec.pollInterval)
+            if (strategy.spec.trigger == TickTrigger.ON_TRADE) attachStream(strategy)
             scheduled += strategy.spec.name
         }
         scheduledStrategies = scheduled
     }
+
+    /** ON_TRADE 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다 */
+    private fun attachStream(strategy: TradingStrategy) {
+        val spec = strategy.spec
+        val broker = brokerClient
+        if (broker !is StreamingBrokerClient || StreamChannel.TRADES !in broker.capabilities.streams) {
+            logger.warn {
+                "[${spec.name}] trigger=ON_TRADE 이지만 브로커 '${broker.capabilities.brokerId}' 는 체결가 스트림을 제공하지 않습니다 - " +
+                    "pollInterval=${spec.pollInterval} 폴링으로 동작합니다"
+            }
+            return
+        }
+        val s = stream ?: broker.openStream().also { opened ->
+            stream = opened
+            opened.connect()
+        }
+        s.subscribeTrades(spec.symbols) { tick ->
+            latestTrades[tick.symbol] = tick
+            requestTick(strategy)
+        }
+        logger.info { "[${spec.name}] trade stream attached / symbols=${spec.symbols} minTickInterval=${spec.minTickInterval}" }
+    }
+
+    /**
+     * 스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 스트림 스레드에서 호출되므로 스케줄만 하고 바로 돌아간다.
+     * 최소 간격은 실행 직전에 다시 확인한다 — 틱이 tick 실행 도중 도착하면 스케줄 시점의 "직전 종료 시각" 이 아직 갱신 전이기 때문.
+     */
+    internal fun requestTick(strategy: TradingStrategy) {
+        if (pendingTicks.putIfAbsent(strategy.spec.name, true) != null) return
+        scheduleStreamTick(strategy)
+    }
+
+    private fun scheduleStreamTick(strategy: TradingStrategy) {
+        scheduler.schedule({ runStreamTick(strategy) }, Instant.now().plusMillis(remainingInterval(strategy.spec)))
+    }
+
+    private fun runStreamTick(strategy: TradingStrategy) {
+        if (remainingInterval(strategy.spec) > 0) {
+            scheduleStreamTick(strategy)
+            return
+        }
+        pendingTicks.remove(strategy.spec.name)
+        tick(strategy)
+    }
+
+    /** 직전 tick 종료 후 minTickInterval 까지 남은 ms (0 이면 바로 실행 가능) */
+    private fun remainingInterval(spec: StrategySpec): Long =
+        ((lastTickEndedAt[spec.name] ?: 0L) + spec.minTickInterval.toMillis() - System.currentTimeMillis()).coerceAtLeast(0L)
 
     internal fun tick(strategy: TradingStrategy) {
         val spec = strategy.spec
@@ -123,13 +202,15 @@ class StrategyEngine(
         } catch (e: Exception) {
             logger.error(e) { "[${spec.name}] tick failed" }
             tradingGuard.recordFailure(e)
+        } finally {
+            lastTickEndedAt[spec.name] = System.currentTimeMillis()
         }
     }
 
     private fun buildContext(strategy: TradingStrategy): StrategyContext {
         val spec = strategy.spec
 
-        val quotes = brokerClient.getQuotes(spec.symbols).quotes.associateBy { it.symbol }
+        val quotes = streamQuotes(spec) ?: brokerClient.getQuotes(spec.symbols).quotes.associateBy { it.symbol }
         val candles = spec.symbols.associateWith { symbol ->
             brokerClient.getCandles(symbol, spec.candleInterval, spec.candleLimit).candles
         }
@@ -149,7 +230,15 @@ class StrategyEngine(
         )
     }
 
+    /** ON_TRADE 전략의 모든 심볼에 스트림 틱이 있으면 그것을 현재가로 쓴다 (REST quotes 1회 절약). 하나라도 없으면 null → REST */
+    private fun streamQuotes(spec: StrategySpec): Map<String, Quote>? {
+        if (spec.trigger != TickTrigger.ON_TRADE || stream == null) return null
+        val ticks = spec.symbols.map { symbol -> latestTrades[symbol] ?: return null }
+        return ticks.associate { it.symbol to it.toQuote() }
+    }
+
     override fun destroy() {
+        runCatching { stream?.close() }
         scheduler.shutdown()
     }
 }

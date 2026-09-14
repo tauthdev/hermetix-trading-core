@@ -21,11 +21,17 @@ data class KisApiProperties(
     val throttleMillis: Long = 0,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초) */
     val tokenRefreshMarginSeconds: Long = 300,
+    /** 실시간 웹소켓 주소. 비우면 환경에 따라 결정 — 모의 ws://ops.koreainvestment.com:31000, 실전 ws://ops.koreainvestment.com:21000 */
+    val wsUrl: String = "",
 ) {
     val isLive: Boolean get() = environment == TradingEnvironment.LIVE
 
     fun resolvedBaseUrl(): String = baseUrl.ifBlank {
         if (isLive) "https://openapi.koreainvestment.com:9443" else "https://openapivts.koreainvestment.com:29443"
+    }
+
+    fun resolvedWsUrl(): String = wsUrl.ifBlank {
+        if (isLive) "ws://ops.koreainvestment.com:21000" else "ws://ops.koreainvestment.com:31000"
     }
 
     fun resolvedThrottleMillis(): Long = if (throttleMillis > 0) throttleMillis else if (isLive) 100 else 600

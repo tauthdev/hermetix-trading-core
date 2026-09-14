@@ -15,8 +15,14 @@ data class KiwoomApiProperties(
     val throttleMillis: Long = 1100,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초) */
     val tokenRefreshMarginSeconds: Long = 300,
+    /** 실시간 웹소켓 주소. 비우면 환경에 따라 결정 — 모의 wss://mockapi.kiwoom.com:10000/api/dostk/websocket, 실전 wss://api.kiwoom.com:10000/api/dostk/websocket */
+    val wsUrl: String = "",
 ) {
     val isLive: Boolean get() = environment == TradingEnvironment.LIVE
 
     fun resolvedBaseUrl(): String = baseUrl.ifBlank { if (isLive) "https://api.kiwoom.com" else "https://mockapi.kiwoom.com" }
+
+    fun resolvedWsUrl(): String = wsUrl.ifBlank {
+        if (isLive) "wss://api.kiwoom.com:10000/api/dostk/websocket" else "wss://mockapi.kiwoom.com:10000/api/dostk/websocket"
+    }
 }

@@ -9,7 +9,9 @@ import com.tripleauth.hermetix.broker.MarketClosedError
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
-import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.broker.TradingEnvironment
@@ -61,7 +63,7 @@ import java.time.format.DateTimeFormatter
 class KiwoomApiClient(
     private val properties: KiwoomApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -74,6 +76,7 @@ class KiwoomApiClient(
         nativeBracket = false,
         fractionalShares = false,
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
+        streams = setOf(StreamChannel.TRADES), // 0B 주식체결 — 문서 기반, 모의 실측 전
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -340,6 +343,11 @@ class KiwoomApiClient(
                 node
             }!!
     }
+
+    // ------------------------------------------------------------------ stream
+
+    /** 웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 [token] 이 갱신한다 */
+    override fun openStream(): MarketStream = KiwoomMarketStream(properties, objectMapper, ::token)
 
     private fun token(): String {
         val cached = cachedToken

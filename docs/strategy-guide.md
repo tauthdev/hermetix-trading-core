@@ -29,8 +29,13 @@ override val spec = StrategySpec(
     candleLimit = 50,                  // 공급받을 캔들 개수
     pollInterval = Duration.ofSeconds(60),
     regularHoursOnly = true,           // false 면 폐장 중에도 호출됨 (주문은 체결 안 됨에 유의)
+    trigger = TickTrigger.POLL,        // ON_TRADE 면 체결가 스트림 틱마다 호출 (kis/kiwoom, 0.8.0) — 폴링은 안전망으로 유지
+    minTickInterval = Duration.ofSeconds(1), // ON_TRADE 에서 연속 호출 사이 최소 간격 (캔들·계좌 REST 폭주 방지)
 )
 ```
+
+- `trigger = ON_TRADE` 는 브로커가 `BrokerCapabilities.streams` 에 `TRADES` 를 선언한 경우에만 스트림을 붙입니다. 아니면 경고 로그 후 폴링으로 동작합니다
+- 스트림 틱이 전략의 모든 심볼을 덮으면 `context.quote()` 는 REST 대신 마지막 체결 틱(가격·호가·누적거래량)으로 채워집니다. 캔들·계좌·미체결은 여전히 REST 라 틱마다 `2 + 심볼 수 + 2` 호출이 나갑니다 — 모의 서버 레이트리밋(kis 2건/s)을 생각해 `minTickInterval` 을 잡으세요
 
 - `candleLimit` 은 필요한 만큼만: 매 틱 심볼마다 캔들 API 를 호출하므로 크면 느려집니다
 - 캔들이 필요 없는 전략도 `candleLimit` 최소값(2 정도)을 두세요

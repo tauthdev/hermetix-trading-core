@@ -27,21 +27,24 @@
 - [x] 레이트리밋 공용 부품 `RateLimiter` — 쓰로틀 + 백오프 + `Retry-After`
 - [x] 브로커 지원 매트릭스 (README 최상단)
 - [x] "새 브로커 요청" 이슈 템플릿 (`.github/ISSUE_TEMPLATE/broker-request.md`)
-- [ ] GitHub Actions CI (빌드 + 단위 테스트, 시크릿 보유 시 실서버 스모크)
 - [x] 어댑터 추가 가이드 문서화 — `conformance/README.md` (실측 → 픽스처 → 구현 → 컨포먼스 → 등록)
 
 ## Phase C — 브로커 커버리지 확장
 
 - [x] 국내 증권사 REST 오픈API 실태 조사 — [claudedocs/korean-broker-openapi-survey-2026-09.md](claudedocs/korean-broker-openapi-survey-2026-09.md)
-- [x] 조사 결과 1·2순위 어댑터 추가 — `nh`(NH PLUG), `db`(DB증권): 공식 SDK 기반 문서 구현, 네 언어 컨포먼스 통과. **모의계좌 실측으로 검증 → README 상태 승격** 이 남았다
-- [x] 3순위 어댑터 추가 — `ls`(LS증권, TR 카탈로그 기반) · `toss`(토스증권, 실전 전용) · `kb`(KB증권 오픈베타, 실전 전용): 문서 기반 구현, 네 언어 컨포먼스 통과. **실측 검증 → README 상태 승격** 이 남았다 (ls 는 모의계좌, toss·kb 는 실계좌 소액)
+- [x] 조사 결과 1·2순위 어댑터 추가 — `nh`(NH PLUG), `db`(DB증권): 공식 SDK 기반 문서 구현, 네 언어 컨포먼스 통과
+- [x] 3순위 어댑터 추가 — `ls`(LS증권, TR 카탈로그 기반) · `toss`(토스증권, 실전 전용) · `kb`(KB증권 오픈베타, 실전 전용): 문서 기반 구현, 네 언어 컨포먼스 통과
+- 위 다섯 어댑터의 실측 검증은 **해당 증권사 계좌를 가진 사용자의 제보로 진행**한다 — 메인테이너가 계좌를 새로 개설하지 않는다. 제보(이슈 템플릿)가 오면 실측 응답으로 골든 픽스처를 교체하고 README 상태를 ⚠️ 미검증 → ✅ 검증으로 승격한다
 - [ ] 토스·KB 에 모의투자 샌드박스가 출시되면 `environments` 에 PAPER 추가
 - [ ] 넥스트증권 `/v2` 연동: `POST /v2/orders/advanced`(BRACKET) 네이티브 브라켓 전환, `POST /v2/kill-switch` 를 `TradingGuard.halt()` 에 연결 (공개 스펙 v1.3 시점 서버 제공 확인)
 
 ## Phase D — 실시간 계층 (Hermetix Pro)
 
-- [ ] 웹소켓 스트리밍 추상화 (next/KIS/키움 모두 WS 제공)
-- [ ] 이벤트 기반 틱 — 폴링 대신 체결가 스트림으로 전략 트리거 (스캘핑류 품질 향상)
+- [x] (0.8.0) 웹소켓 스트리밍 추상화 — `MarketStream` / `StreamingBrokerClient` SPI, `BrokerCapabilities.streams` 선언, JDK 내장 웹소켓 기반 재연결 공용 부품. **넥스트증권은 공개 스펙 v1.3 에 웹소켓이 없어 대상에서 제외** — KIS(`H0STCNT0`)·키움(`0B`) 체결가 채널을 문서 기반으로 구현, 모의 실측 전
+- [x] (0.8.0) 이벤트 기반 틱 — `StrategySpec.trigger = ON_TRADE`: 체결가 틱마다 전략 호출, 틱 합치기 + `minTickInterval`, 스트림 단절 시 폴링 안전망
+- [ ] KIS·키움 모의 웹소켓 실측 (장중, 기존 모의 키) → 픽스처 `stream` 섹션을 실측 프레임으로 교체 → README 실시간 열 승격
+- [ ] Python / JS / Go 포팅 — Kotlin 실측이 끝난 뒤 한 세트로 (Python 은 선택 의존성 `websockets`, JS 는 Node 22 내장 WebSocket, Go 는 웹소켓 라이브러리 1개)
+- [ ] 2차 채널 — 주문 체결 통보(KIS `H0STCNI9`/키움 `00`), 호가(KIS `H0STASP0`/키움 `0D`)
 
 ## Phase E — 다언어 도달 (진행 중)
 
