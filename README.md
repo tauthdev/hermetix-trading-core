@@ -8,6 +8,7 @@
 
 [![JitPack](https://jitpack.io/v/tauthdev/hermetix-trading-core.svg)](https://jitpack.io/#tauthdev/hermetix-trading-core)
 [![npm](https://img.shields.io/npm/v/hermetix.svg)](https://www.npmjs.com/package/hermetix)
+[![PyPI](https://img.shields.io/pypi/v/hermetix.svg)](https://pypi.org/project/hermetix/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F.svg?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)

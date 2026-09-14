@@ -51,6 +51,7 @@
 
 ## Phase E — 다언어 도달 (진행 중)
 
+- [x] (2026-09-14) 한 줄 설치 배포 — Kotlin JitPack, Go `go/v0.10.0` 태그, npm `hermetix`, PyPI `hermetix`. 릴리즈 절차는 수동(CI 없음): 태그 → `npm publish`(2FA 브라우저) → `twine upload`
 - [x] Python / JavaScript·TypeScript / Go 네이티브 포팅 — Kotlin 레퍼런스를 언어별로 손 포팅하고 같은 골든 픽스처로 동작 일치를 보증한다
 - 원칙: **증권사 키는 항상 사용자 기기에서만 쓰인다.** Hermetix 가 운영하는 서버로 키를 받아 대신 호출하는 구조(게이트웨이/데몬 호스팅)는 한국 금융 라이선스 문제로 채택하지 않는다. 다언어 지원은 ccxt 처럼 각 언어의 로컬 라이브러리로만 제공한다
 
