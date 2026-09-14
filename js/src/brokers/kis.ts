@@ -8,8 +8,10 @@
  */
 import { Decimal } from "decimal.js";
 import {
-  BrokerClient, D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstToday, kstYyyymmdd,
+  D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstToday, kstYyyymmdd,
 } from "../broker.js";
+import type { MarketStream, StreamingBrokerClient } from "../broker.js";
+import { KisMarketStream } from "./kisStream.js";
 import { AuthError, BrokerApiError, MarketClosedError, RateLimitError } from "../errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
@@ -21,7 +23,7 @@ import { isOpenStatus } from "../models.js";
 
 interface Tracked { order: Order; baselineQty: Decimal; day: string; }
 
-export class KisClient implements BrokerClient {
+export class KisClient implements StreamingBrokerClient {
   readonly capabilities: BrokerCapabilities = {
     brokerId: "kis",
     market: "KRX",
@@ -32,6 +34,7 @@ export class KisClient implements BrokerClient {
     fractionalShares: false,
     serverOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
+    streams: new Set(["TRADES"]), // H0STCNT0 체결가 — 2026-09 모의 실측
   };
 
   private token: string | null = null;
@@ -42,11 +45,15 @@ export class KisClient implements BrokerClient {
 
   static readonly PAPER_URL = "https://openapivts.koreainvestment.com:29443";
   static readonly LIVE_URL = "https://openapi.koreainvestment.com:9443";
+  static readonly PAPER_WS_URL = "ws://ops.koreainvestment.com:31000";
+  static readonly LIVE_WS_URL = "ws://ops.koreainvestment.com:21000";
   readonly baseUrl: string;
+  readonly wsUrl: string;
 
   /**
    * baseUrl 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
    * throttleMs 0 이면 자동 — 모의 600(초당 2건), 실전 100(초당 20건 한도의 절반). 계좌 TR ID 는 모의 V / 실전 T 프리픽스.
+   * wsUrl 을 비우면 환경에 따라 결정(모의 ws://ops…:31000 / 실전 :21000).
    */
   constructor(
     private readonly appkey: string,
@@ -56,9 +63,11 @@ export class KisClient implements BrokerClient {
     baseUrl: string = "",
     throttleMs = 0,
     readonly environment: TradingEnvironment = "PAPER",
+    wsUrl: string = "",
   ) {
     const live = environment === "LIVE";
     this.baseUrl = baseUrl || (live ? KisClient.LIVE_URL : KisClient.PAPER_URL);
+    this.wsUrl = wsUrl || (live ? KisClient.LIVE_WS_URL : KisClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs || (live ? 100 : 600), 3, (attempt) => 1000 * attempt);
   }
 
@@ -203,6 +212,29 @@ export class KisClient implements BrokerClient {
         symbol: t.order.symbol ?? null, side: t.order.side ?? null,
         quantity: t.order.quantity ?? null, price: t.order.limitPrice ?? null,
       }));
+  }
+
+  // ---------------------------------------------------------------- stream
+
+  openStream(): MarketStream {
+    return new KisMarketStream({ wsUrl: this.wsUrl, custtype: "P", approvalKey: () => this.approvalKey() });
+  }
+
+  /**
+   * 웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방.
+   * 필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의.
+   */
+  async approvalKey(): Promise<string> {
+    await this.limiter.throttle.wait();
+    const [status, body] = await httpJson(`${this.baseUrl}/oauth2/Approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_type: "client_credentials", appkey: this.appkey, secretkey: this.appsecret }),
+    });
+    if (status < 200 || status >= 300 || typeof body.approval_key !== "string") {
+      throw new AuthError(status, (body.error_code as string) ?? null, `KIS 웹소켓 접속키 발급 실패: ${body.error_description ?? ""}`);
+    }
+    return body.approval_key;
   }
 
   // -------------------------------------------------------------- internal

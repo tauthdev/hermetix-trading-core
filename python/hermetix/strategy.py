@@ -26,11 +26,25 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 
 from .models import (
     symbols_match,
     Account, Candle, CandleInterval, Holding, Order, OrderType, Quote, TimeInForce,
 )
+
+
+class TickTrigger(Enum):
+    """전략 호출을 무엇이 촉발하는가.
+
+    - POLL: poll_interval_seconds 주기로만 호출한다 (기본, 모든 브로커)
+    - ON_TRADE: 브로커 체결가 스트림의 틱이 올 때마다 호출한다. 틱이 몰리면 하나로 합치고
+      min_tick_interval_seconds 보다 촘촘히는 부르지 않는다. 폴링은 안전망으로 계속 돈다 -
+      스트림이 끊겨도 전략은 poll_interval 주기로 계속 호출된다.
+      브로커가 StreamChannel.TRADES 를 선언하지 않으면 경고 후 POLL 로 동작한다
+    """
+    POLL = "POLL"
+    ON_TRADE = "ON_TRADE"
 
 
 @dataclass(frozen=True)
@@ -39,8 +53,13 @@ class StrategySpec:
     symbols: list[str]
     candle_interval: CandleInterval = CandleInterval.DAY_1
     candle_limit: int = 30
+    # 전략 호출 주기 (ON_TRADE 에서는 스트림이 끊겼을 때의 안전망 주기)
     poll_interval_seconds: float = 60.0
     regular_hours_only: bool = True
+    # 전략 호출을 촉발하는 것 - 주기 폴링 또는 체결가 스트림
+    trigger: TickTrigger = TickTrigger.POLL
+    # ON_TRADE 에서 연속 호출 사이의 최소 간격. REST 호출(캔들·계좌) 폭주를 막는다
+    min_tick_interval_seconds: float = 1.0
 
 
 @dataclass(frozen=True)

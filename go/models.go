@@ -177,6 +177,40 @@ type Fill struct {
 	Price    *decimal.Decimal
 }
 
+// StreamChannel - 브로커가 제공하는 실시간 스트림 채널. BrokerCapabilities.Streams 로 선언한다.
+type StreamChannel string
+
+// StreamTrades - 체결가 스트림. 체결이 일어날 때마다 TradeTick 을 밀어준다.
+const StreamTrades StreamChannel = "TRADES"
+
+// TradeTick - 체결 1건. 브로커 프레임을 공통 모델로 정규화한 것.
+//   - Symbol 은 구독 요청 표기 그대로 돌려준다 (KRX:005930 으로 구독하면 KRX:005930)
+//   - Quantity 는 이 체결의 수량, CumulativeVolume 은 당일 누적 거래량
+//   - 호가·등락은 프레임에 있으면 채우고 없으면 nil
+type TradeTick struct {
+	Symbol           string
+	Price            decimal.Decimal
+	Quantity         decimal.Decimal
+	Timestamp        time.Time
+	BidPrice         *decimal.Decimal
+	AskPrice         *decimal.Decimal
+	CumulativeVolume *int64
+	Change           *decimal.Decimal
+	ChangeRate       *decimal.Decimal
+}
+
+// ToQuote - 스트림 틱을 REST 현재가와 같은 모양으로 (엔진이 quotes 호출을 아낄 때).
+func (t TradeTick) ToQuote() Quote {
+	var volume int64
+	if t.CumulativeVolume != nil {
+		volume = *t.CumulativeVolume
+	}
+	return Quote{
+		Symbol: t.Symbol, Price: t.Price, BidPrice: t.BidPrice, AskPrice: t.AskPrice,
+		Volume: volume, Change: t.Change, ChangeRate: t.ChangeRate, Timestamp: t.Timestamp,
+	}
+}
+
 // BrokerCapabilities - 브로커가 지원하는 기능의 코드 선언. 실측으로 확인한 것만 true.
 type BrokerCapabilities struct {
 	BrokerID         string
@@ -192,6 +226,18 @@ type BrokerCapabilities struct {
 	Environments map[TradingEnvironment]bool
 	// 한 계좌로 다룰 수 있는 시장 목록 (MARKET:CODE 접두 허용 값). nil 이면 {Market}
 	Markets map[string]bool
+	// 실시간 스트림 채널. nil 이면 폴링만 가능. 선언한 어댑터는 StreamingBrokerClient 를 구현해야 한다 — 엔진은 둘 다 확인한다
+	Streams []StreamChannel
+}
+
+// HasStream - 선언된 실시간 채널인지.
+func (c BrokerCapabilities) HasStream(channel StreamChannel) bool {
+	for _, ch := range c.Streams {
+		if ch == channel {
+			return true
+		}
+	}
+	return false
 }
 
 // SupportsEnvironment - 선언된 환경인지 (nil 이면 Paper 만).

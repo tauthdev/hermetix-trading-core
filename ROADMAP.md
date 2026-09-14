@@ -43,7 +43,7 @@
 - [x] (0.8.0) 웹소켓 스트리밍 추상화 — `MarketStream` / `StreamingBrokerClient` SPI, `BrokerCapabilities.streams` 선언, JDK 내장 웹소켓 기반 재연결 공용 부품. **넥스트증권은 공개 스펙 v1.3 에 웹소켓이 없어 대상에서 제외** — KIS(`H0STCNT0`)·키움(`0B`) 체결가 채널 구현, 2026-09-14 모의 장중 실측 통과
 - [x] (0.8.0) 이벤트 기반 틱 — `StrategySpec.trigger = ON_TRADE`: 체결가 틱마다 전략 호출, 틱 합치기 + `minTickInterval`, 스트림 단절 시 폴링 안전망
 - [x] KIS·키움 모의 웹소켓 실측 → 픽스처 `stream` 섹션을 실측 프레임으로 교체 → README 실시간 열 ✅
-- [ ] Python / JS / Go 포팅 — Kotlin 실측이 끝난 뒤 한 세트로 (Python 은 선택 의존성 `websockets`, JS 는 Node 22 내장 WebSocket, Go 는 웹소켓 라이브러리 1개)
+- [x] Python / JS / Go 포팅 — 같은 SPI·엔진 트리거·파서, 픽스처 `stream` 섹션(실측 프레임)으로 네 언어 파서 일치 검증. Python 은 선택 의존성 `websockets`(`pip install hermetix[stream]`), JS 는 Node 22 내장 WebSocket, Go 는 `github.com/coder/websocket`
 - [ ] 2차 채널 — 주문 체결 통보(KIS `H0STCNI9`/키움 `00`), 호가(KIS `H0STASP0`/키움 `0D`)
 
 ## Phase E — 다언어 도달 (진행 중)

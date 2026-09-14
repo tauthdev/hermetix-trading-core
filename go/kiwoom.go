@@ -21,6 +21,8 @@ type KiwoomClient struct {
 	appkey, secretkey string
 	baseURL           string
 	customBaseURL     bool
+	wsURL             string
+	customWsURL       bool
 	environment       TradingEnvironment
 	http              *http.Client
 	limiter           *rateLimiter
@@ -39,6 +41,7 @@ func NewKiwoomClient(appkey, secretkey string) *KiwoomClient {
 	c := &KiwoomClient{
 		appkey: appkey, secretkey: secretkey,
 		baseURL:     KiwoomPaperURL,
+		wsURL:       KiwoomWsPaperURL,
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
 		limiter:     newRateLimiter(1100*time.Millisecond, 3, func(attempt int) time.Duration { return time.Duration(attempt) * 1100 * time.Millisecond }),
@@ -69,6 +72,19 @@ func (c *KiwoomClient) SetEnvironment(env TradingEnvironment) *KiwoomClient {
 			c.baseURL = KiwoomLiveURL
 		}
 	}
+	if !c.customWsURL {
+		c.wsURL = KiwoomWsPaperURL
+		if env == Live {
+			c.wsURL = KiwoomWsLiveURL
+		}
+	}
+	return c
+}
+
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시).
+func (c *KiwoomClient) SetWSURL(wsURL string) *KiwoomClient {
+	c.wsURL = wsURL
+	c.customWsURL = true
 	return c
 }
 
@@ -86,7 +102,13 @@ func (c *KiwoomClient) Capabilities() BrokerCapabilities {
 		FractionalShares: false,
 		ServerOpenOrders: true, // ka10075 미체결 조회 제공
 		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true},
+		Streams:          []StreamChannel{StreamTrades}, // 0B 주식체결 — 2026-09 모의 실측
 	}
+}
+
+// OpenStream - 체결 웹소켓 스트림. 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 getToken 이 갱신한다.
+func (c *KiwoomClient) OpenStream() MarketStream {
+	return newKiwoomMarketStream(c.wsURL, c.getToken)
 }
 
 // ------------------------------------------------------------------- market

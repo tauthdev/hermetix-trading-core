@@ -1,7 +1,7 @@
 {
   "name": "hermetix",
-  "version": "0.2.0",
-  "description": "\uc99d\uad8c\uc0ac \ubaa8\uc758\ud22c\uc790 \ud1b5\ud569 \ud2b8\ub808\uc774\ub529 \ud504\ub808\uc784\uc6cc\ud06c - JavaScript/TypeScript",
+  "version": "0.8.0",
+  "description": "증권사 모의투자 통합 트레이딩 프레임워크 - JavaScript/TypeScript",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -12,7 +12,7 @@
     }
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
@@ -24,7 +24,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^5.5.0"
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.5.0",
+    "ws": "^8.21.3"
   },
   "license": "MIT"
 }

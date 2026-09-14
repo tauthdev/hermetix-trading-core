@@ -15,13 +15,14 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote,
+    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel,
 )
+from .kiwoom_stream import KiwoomMarketStream
 
 
 def _signed(value, default: str = "0") -> Decimal:
@@ -45,7 +46,7 @@ def _padded(value, default: str = "0") -> Decimal:
     return Decimal(text or default)
 
 
-class KiwoomClient(BrokerClient):
+class KiwoomClient(StreamingBrokerClient):
 
     capabilities = BrokerCapabilities(
         broker_id="kiwoom",
@@ -57,16 +58,22 @@ class KiwoomClient(BrokerClient):
         fractional_shares=False,
         server_open_orders=True,  # ka10075 미체결 조회 제공
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
+        streams=frozenset({StreamChannel.TRADES}),  # 0B 주식체결 - 2026-09 모의 실측
     )
 
     PAPER_URL = "https://mockapi.kiwoom.com"
     LIVE_URL = "https://api.kiwoom.com"
+    PAPER_WS_URL = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket"
+    LIVE_WS_URL = "wss://api.kiwoom.com:10000/api/dostk/websocket"
 
     def __init__(self, appkey: str, secretkey: str,
                  base_url: str = "", throttle_seconds: float = 1.1,
-                 environment: TradingEnvironment = TradingEnvironment.PAPER):
-        """base_url 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통."""
+                 environment: TradingEnvironment = TradingEnvironment.PAPER,
+                 ws_url: str = ""):
+        """base_url 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통.
+        ws_url 을 비우면 실시간 웹소켓은 모의 mockapi:10000 / 실전 api:10000."""
         self.environment = environment
+        self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
         self._appkey = appkey
         self._secretkey = secretkey
         self._http = _Http(base_url or (self.LIVE_URL if environment == TradingEnvironment.LIVE else self.PAPER_URL))
@@ -259,6 +266,12 @@ class KiwoomClient(BrokerClient):
                 raise AuthError(status, code, msg)
             raise BrokerApiError(status, code, msg)
         return parsed
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        """웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 - 만료 시 재접속 때 _get_token 이 갱신한다"""
+        return KiwoomMarketStream(self._ws_url, self._get_token)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:

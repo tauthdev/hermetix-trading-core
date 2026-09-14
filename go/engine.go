@@ -428,6 +428,11 @@ func (e *OrderExecutor) clientOrderID(strategyName string) string {
 }
 
 // StrategyEngine - 등록된 전략들을 각자의 PollInterval 로 순차 호출한다.
+//
+// 실시간 트리거(TriggerOnTrade): 브로커가 StreamingBrokerClient 이고 StreamTrades 를 선언하면 Run 시작 시 전략 심볼의
+// 체결가 스트림을 구독하고, 틱마다 같은 단일 루프 고루틴에 tick 을 넣는다. 대기 중인 틱이 있으면 합치고(pending),
+// 직전 틱 종료 후 MinTickInterval 이 지나야 다음을 돌린다 (실행 직전에 다시 확인). 폴링은 안전망으로 계속 돈다.
+// 스트림 틱이 모든 심볼을 덮으면 quotes REST 호출 대신 마지막 틱을 현재가로 쓴다.
 type StrategyEngine struct {
 	Broker     BrokerClient
 	Guard      *TradingGuard
@@ -436,6 +441,15 @@ type StrategyEngine struct {
 	Calendar   *MarketCalendar
 	Strategies []Strategy
 	stop       chan struct{}
+	stopOnce   sync.Once
+
+	// 스트림 상태 — 스트림 고루틴과 루프 고루틴이 공유한다
+	streamMu      sync.Mutex
+	stream        MarketStream
+	latestTrades  map[string]TradeTick // 심볼(요청 표기) → 마지막 체결 틱
+	pending       map[string]bool      // 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용)
+	lastTickEnded map[string]time.Time // 전략 이름 → 직전 tick 종료 시각
+	wake          chan struct{}        // 스트림 틱 도착 신호 (버퍼 1 — 몰려도 한 번만 깨운다)
 }
 
 // EngineOptions - 실전 게이트와 주문 금액 상한.
@@ -490,15 +504,20 @@ func NewStrategyEngineWithOptions(broker BrokerClient, strategies []Strategy, op
 
 	return &StrategyEngine{
 		Broker: broker, Guard: guard, Brackets: brackets,
-		Executor:   NewOrderExecutor(broker, brackets, guard).WithRisk(risk),
-		Calendar:   NewMarketCalendar(broker),
-		Strategies: accepted,
-		stop:       make(chan struct{}),
+		Executor:      NewOrderExecutor(broker, brackets, guard).WithRisk(risk),
+		Calendar:      NewMarketCalendar(broker),
+		Strategies:    accepted,
+		stop:          make(chan struct{}),
+		latestTrades:  map[string]TradeTick{},
+		pending:       map[string]bool{},
+		lastTickEnded: map[string]time.Time{},
+		wake:          make(chan struct{}, 1),
 	}
 }
 
-// Run - 블로킹 실행 루프. Stop() 으로 종료.
+// Run - 블로킹 실행 루프. Stop() 으로 종료. TriggerOnTrade 전략이 있으면 시작 시 체결가 스트림을 붙인다.
 func (e *StrategyEngine) Run() {
+	e.attachStreams()
 	nextRun := map[string]time.Time{}
 	for {
 		select {
@@ -506,18 +525,159 @@ func (e *StrategyEngine) Run() {
 			return
 		default:
 		}
+		sleep := time.Second
 		for _, strategy := range e.Strategies {
 			spec := strategy.Spec()
 			if time.Now().After(nextRun[spec.Name]) {
-				e.Tick(strategy)
+				e.runTick(strategy)
 				nextRun[spec.Name] = time.Now().Add(spec.pollInterval())
 			}
+			// 스트림이 요청한 tick — 직전 종료 후 MinTickInterval 이 지났을 때만 (실행 직전 재확인)
+			if e.isPending(spec.Name) {
+				if remaining := e.remainingInterval(spec); remaining > 0 {
+					if remaining < sleep {
+						sleep = remaining
+					}
+				} else {
+					e.clearPending(spec.Name)
+					e.runTick(strategy)
+				}
+			}
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-e.stop:
+			return
+		case <-e.wake:
+		case <-time.After(sleep):
+		}
 	}
 }
 
-func (e *StrategyEngine) Stop() { close(e.stop) }
+// Stop - 루프를 멈추고 스트림을 닫는다.
+func (e *StrategyEngine) Stop() {
+	e.stopOnce.Do(func() {
+		close(e.stop)
+		e.streamMu.Lock()
+		stream := e.stream
+		e.streamMu.Unlock()
+		if stream != nil {
+			_ = stream.Close()
+		}
+	})
+}
+
+// StreamConnected - 체결가 스트림이 열려 있고 로그인까지 끝났는지 (상태 확인용).
+func (e *StrategyEngine) StreamConnected() bool {
+	e.streamMu.Lock()
+	stream := e.stream
+	e.streamMu.Unlock()
+	return stream != nil && stream.IsConnected()
+}
+
+// attachStreams - TriggerOnTrade 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다.
+func (e *StrategyEngine) attachStreams() {
+	for _, strategy := range e.Strategies {
+		spec := strategy.Spec()
+		if spec.Trigger != TriggerOnTrade {
+			continue
+		}
+		streaming, ok := e.Broker.(StreamingBrokerClient)
+		if !ok || !e.Broker.Capabilities().HasStream(StreamTrades) {
+			log.Printf("WARN hermetix [%s] Trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - PollInterval=%s 폴링으로 동작합니다",
+				spec.Name, e.Broker.Capabilities().BrokerID, spec.pollInterval())
+			continue
+		}
+		e.streamMu.Lock()
+		stream := e.stream
+		if stream == nil {
+			stream = streaming.OpenStream()
+			e.stream = stream
+			stream.Connect()
+		}
+		e.streamMu.Unlock()
+		name := spec.Name
+		stream.SubscribeTrades(spec.Symbols, func(tick TradeTick) {
+			e.streamMu.Lock()
+			e.latestTrades[tick.Symbol] = tick
+			e.streamMu.Unlock()
+			e.requestTick(name)
+		})
+		log.Printf("INFO hermetix [%s] trade stream attached / symbols=%v minTickInterval=%s", spec.Name, spec.Symbols, spec.minTickInterval())
+	}
+}
+
+// requestTick - 스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 스트림 고루틴에서 호출되므로 신호만 보내고 돌아온다.
+func (e *StrategyEngine) requestTick(strategyName string) {
+	e.streamMu.Lock()
+	already := e.pending[strategyName]
+	e.pending[strategyName] = true
+	e.streamMu.Unlock()
+	if already {
+		return
+	}
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (e *StrategyEngine) isPending(strategyName string) bool {
+	e.streamMu.Lock()
+	defer e.streamMu.Unlock()
+	return e.pending[strategyName]
+}
+
+func (e *StrategyEngine) clearPending(strategyName string) {
+	e.streamMu.Lock()
+	delete(e.pending, strategyName)
+	e.streamMu.Unlock()
+}
+
+// remainingInterval - 직전 tick 종료 후 MinTickInterval 까지 남은 시간 (0 이면 바로 실행 가능).
+func (e *StrategyEngine) remainingInterval(spec StrategySpec) time.Duration {
+	e.streamMu.Lock()
+	ended := e.lastTickEnded[spec.Name]
+	e.streamMu.Unlock()
+	if ended.IsZero() {
+		return 0
+	}
+	if remaining := spec.minTickInterval() - time.Since(ended); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+// runTick - Tick + 종료 시각 기록 (폴링·스트림 공통).
+func (e *StrategyEngine) runTick(strategy Strategy) {
+	name := strategy.Spec().Name
+	defer func() {
+		e.streamMu.Lock()
+		e.lastTickEnded[name] = time.Now()
+		e.streamMu.Unlock()
+	}()
+	e.Tick(strategy)
+}
+
+// streamQuotes - TriggerOnTrade 전략의 모든 심볼에 스트림 틱이 있으면 그것을 현재가로 (REST quotes 1회 절약). 하나라도 없으면 nil → REST.
+func (e *StrategyEngine) streamQuotes(spec StrategySpec) map[string]Quote {
+	if spec.Trigger != TriggerOnTrade {
+		return nil
+	}
+	e.streamMu.Lock()
+	defer e.streamMu.Unlock()
+	if e.stream == nil {
+		return nil
+	}
+	quotes := make(map[string]Quote, len(spec.Symbols))
+	for _, symbol := range spec.Symbols {
+		tick, ok := e.latestTrades[symbol]
+		if !ok {
+			return nil
+		}
+		quotes[symbol] = tick.ToQuote()
+	}
+	return quotes
+}
 
 func (e *StrategyEngine) Tick(strategy Strategy) {
 	spec := strategy.Spec()
@@ -574,9 +734,16 @@ func (e *StrategyEngine) tick(strategy Strategy) error {
 
 func (e *StrategyEngine) buildContext(strategy Strategy) (*StrategyContext, error) {
 	spec := strategy.Spec()
-	quotes, err := e.Broker.GetQuotes(spec.Symbols)
-	if err != nil {
-		return nil, err
+	quoteMap := e.streamQuotes(spec)
+	if quoteMap == nil {
+		quotes, err := e.Broker.GetQuotes(spec.Symbols)
+		if err != nil {
+			return nil, err
+		}
+		quoteMap = map[string]Quote{}
+		for _, q := range quotes {
+			quoteMap[q.Symbol] = q
+		}
 	}
 	candles := map[string][]Candle{}
 	for _, symbol := range spec.Symbols {
@@ -603,10 +770,6 @@ func (e *StrategyEngine) buildContext(strategy Strategy) (*StrategyContext, erro
 		return nil, err
 	}
 
-	quoteMap := map[string]Quote{}
-	for _, q := range quotes {
-		quoteMap[q.Symbol] = q
-	}
 	holdingMap := map[string]Holding{}
 	for _, h := range holdings {
 		holdingMap[h.Symbol] = h

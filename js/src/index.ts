@@ -29,26 +29,29 @@
 export { Decimal } from "./models.js";
 export type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TimeInForce, TradingEnvironment,
+  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel, TimeInForce, TradeTick, TradingEnvironment,
 } from "./models.js";
-export { isOpenStatus, parseSymbol, symbolCode, symbolCodeFor, symbolsMatch } from "./models.js";
+export { isOpenStatus, parseSymbol, symbolCode, symbolCodeFor, symbolsMatch, tradeTickToQuote } from "./models.js";
 export {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
   MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "./errors.js";
-export type { BrokerClient } from "./broker.js";
-export { RateLimiter, Throttle, krxTickRound } from "./broker.js";
+export type { BrokerClient, MarketStream, StreamingBrokerClient, TradeListener } from "./broker.js";
+export { RateLimiter, Throttle, isStreamingBrokerClient, krxTickRound } from "./broker.js";
+export { ReconnectingWebSocket } from "./stream.js";
 export { verifyBrokerConformance } from "./testing.js";
 export type { ConformanceReport, ConformanceScenario } from "./testing.js";
 export { NextClient } from "./brokers/next.js";
 export { KisClient } from "./brokers/kis.js";
+export { KisMarketStream, parseKisFrame } from "./brokers/kisStream.js";
 export { KiwoomClient } from "./brokers/kiwoom.js";
+export { KiwoomMarketStream, parseKiwoomReal } from "./brokers/kiwoomStream.js";
 export { NhClient } from "./brokers/nh.js";
 export { DbClient } from "./brokers/db.js";
 export { LsClient } from "./brokers/ls.js";
 export { TossClient } from "./brokers/toss.js";
 export { KbClient } from "./brokers/kb.js";
-export type { Buy, Cancel, Sell, Signal, Strategy, StrategySpec } from "./strategy.js";
+export type { Buy, Cancel, Sell, Signal, Strategy, StrategySpec, TickTrigger } from "./strategy.js";
 export { StrategyContext, buy, cancel, sell } from "./strategy.js";
 export {
   BracketMonitor, MarketCalendar, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard, pnlReport,

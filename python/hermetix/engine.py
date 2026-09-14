@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from .broker import BrokerClient
+from .broker import BrokerClient, MarketStream, StreamingBrokerClient
 from .errors import InsufficientFundsError, MarketClosedError, RateLimitError
-from .models import CreateOrderRequest, Order, OrderSide, OrderStatus, OrderType, TradingEnvironment
-from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext
+from .models import CreateOrderRequest, Order, OrderSide, OrderStatus, OrderType, StreamChannel, TradeTick, TradingEnvironment
+from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, TickTrigger
 
 logger = logging.getLogger("hermetix")
 
@@ -295,7 +295,13 @@ class OrderExecutor:
 
 
 class StrategyEngine:
-    """등록된 전략들을 각자의 poll_interval 로 순차 호출한다."""
+    """등록된 전략들을 각자의 poll_interval 로 순차 호출한다.
+
+    실시간 트리거(TickTrigger.ON_TRADE): 브로커가 StreamingBrokerClient 이고 TRADES 채널을 선언하면
+    전략 심볼의 체결가 스트림을 구독하고, 틱마다 run 루프를 깨워 같은 스레드에서 tick 을 돌린다.
+    대기 중인 틱이 있으면 합치고, 직전 틱 종료 후 min_tick_interval_seconds 가 지나야 다음을 돌린다 (실행 직전에 재확인).
+    스트림 틱이 모든 심볼을 덮으면 quotes REST 호출 대신 마지막 틱을 현재가로 쓴다. 폴링은 안전망으로 계속 돈다.
+    """
 
     def __init__(self, broker: BrokerClient, strategies: list[Strategy],
                  max_consecutive_failures: int = 5, *,
@@ -311,6 +317,11 @@ class StrategyEngine:
         self.executor = OrderExecutor(broker, self.brackets, self.guard, self.risk)
         self.calendar = MarketCalendar(broker)
         self._stop = threading.Event()
+        self._wake = threading.Event()           # 스트림 틱이 run 루프를 깨운다
+        self._stream: MarketStream | None = None
+        self.latest_trades: dict[str, TradeTick] = {}   # 심볼(요청 표기) -> 마지막 체결 틱
+        self._pending: dict[str, bool] = {}              # 전략 이름 -> 대기 중인 스트림 틱 (합치기용)
+        self._last_tick_ended_at: dict[str, float] = {}  # 전략 이름 -> 직전 tick 종료 시각 (monotonic)
 
         caps = broker.capabilities
         environment = broker.environment
@@ -336,23 +347,87 @@ class StrategyEngine:
             self.strategies.append(strategy)
         logger.info("broker=%s environment=%s market=%s / strategies=%s",
                     caps.broker_id, environment.value, caps.market, [s.spec.name for s in self.strategies])
+        for strategy in self.strategies:
+            if strategy.spec.trigger == TickTrigger.ON_TRADE:
+                self._attach_stream(strategy)
+
+    @property
+    def stream_connected(self) -> bool:
+        """스트림이 열려 있고 로그인까지 끝났는지 - 상태 확인용"""
+        return self._stream is not None and self._stream.is_connected
+
+    def _attach_stream(self, strategy: Strategy) -> None:
+        """ON_TRADE 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다"""
+        spec = strategy.spec
+        broker = self.broker
+        if not isinstance(broker, StreamingBrokerClient) or StreamChannel.TRADES not in broker.capabilities.streams:
+            logger.warning("[%s] trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - "
+                           "poll_interval=%ss 폴링으로 동작합니다", spec.name, broker.capabilities.broker_id,
+                           spec.poll_interval_seconds)
+            return
+        if self._stream is None:
+            self._stream = broker.open_stream()
+            self._stream.connect()
+
+        def on_trade(tick: TradeTick, strategy=strategy) -> None:
+            self.latest_trades[tick.symbol] = tick
+            self.request_tick(strategy)
+
+        self._stream.subscribe_trades(spec.symbols, on_trade)
+        logger.info("[%s] trade stream attached / symbols=%s min_tick_interval=%ss",
+                    spec.name, spec.symbols, spec.min_tick_interval_seconds)
+
+    def request_tick(self, strategy: Strategy) -> None:
+        """스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 스트림 스레드에서 호출되므로 플래그만 세우고 루프를 깨운다"""
+        self._pending[strategy.spec.name] = True
+        self._wake.set()
+
+    def _remaining_interval(self, strategy: Strategy) -> float:
+        """직전 tick 종료 후 min_tick_interval 까지 남은 초 (0 이면 바로 실행 가능)"""
+        last = self._last_tick_ended_at.get(strategy.spec.name)
+        if last is None:
+            return 0.0
+        return max(0.0, last + strategy.spec.min_tick_interval_seconds - time.monotonic())
 
     def run(self) -> None:
-        """블로킹 실행 루프. stop() 또는 KeyboardInterrupt 로 종료."""
+        """블로킹 실행 루프. stop() 또는 KeyboardInterrupt 로 종료.
+
+        폴링 스케줄은 그대로 두고(안전망), 스트림 틱이 요청한 전략은 최소 간격이 지났을 때 같은 스레드에서 추가로 돌린다.
+        """
         next_run = {s.spec.name: 0.0 for s in self.strategies}
         try:
             while not self._stop.is_set():
+                self._wake.clear()  # 이 아래에서 도착하는 틱은 다음 대기를 즉시 깨운다
                 now = time.monotonic()
+                wait = 1.0
                 for strategy in self.strategies:
-                    if now >= next_run[strategy.spec.name]:
+                    name = strategy.spec.name
+                    if now >= next_run[name]:
                         self.tick(strategy)
-                        next_run[strategy.spec.name] = time.monotonic() + strategy.spec.poll_interval_seconds
-                self._stop.wait(1.0)
+                        next_run[name] = time.monotonic() + strategy.spec.poll_interval_seconds
+                    if self._pending.get(name):
+                        # 최소 간격은 실행 직전에 확인한다 - tick 도중 도착한 틱은 종료 시각이 갱신된 뒤에야 판정할 수 있다
+                        remaining = self._remaining_interval(strategy)
+                        if remaining > 0:
+                            wait = min(wait, remaining)
+                        else:
+                            self._pending.pop(name, None)
+                            self.tick(strategy)
+                            wait = 0.0  # 방금 돌린 전략에 또 틱이 쌓였을 수 있다 - 바로 재판정
+                if wait > 0:
+                    self._wake.wait(wait)
         except KeyboardInterrupt:
             logger.info("interrupted - engine stopping")
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def tick(self, strategy: Strategy) -> None:
         spec = strategy.spec
@@ -381,12 +456,30 @@ class StrategyEngine:
         except Exception as e:  # noqa: BLE001
             logger.exception("[%s] tick failed", spec.name)
             self.guard.record_failure(e)
+        finally:
+            self._last_tick_ended_at[spec.name] = time.monotonic()
+
+    def _stream_quotes(self, strategy: Strategy) -> dict | None:
+        """ON_TRADE 전략의 모든 심볼에 스트림 틱이 있으면 그것을 현재가로 쓴다 (REST quotes 1회 절약). 하나라도 없으면 None -> REST"""
+        spec = strategy.spec
+        if spec.trigger != TickTrigger.ON_TRADE or self._stream is None:
+            return None
+        quotes = {}
+        for symbol in spec.symbols:
+            tick = self.latest_trades.get(symbol)
+            if tick is None:
+                return None
+            quotes[symbol] = tick.to_quote()
+        return quotes
 
     def _build_context(self, strategy: Strategy) -> StrategyContext:
         spec = strategy.spec
+        quotes = self._stream_quotes(strategy)
+        if quotes is None:
+            quotes = {q.symbol: q for q in self.broker.get_quotes(spec.symbols)}
         return StrategyContext(
             now=datetime.now(timezone.utc),
-            quotes={q.symbol: q for q in self.broker.get_quotes(spec.symbols)},
+            quotes=quotes,
             candles={s: self.broker.get_candles(s, spec.candle_interval, spec.candle_limit)
                      for s in spec.symbols},
             account=self.broker.get_account(),

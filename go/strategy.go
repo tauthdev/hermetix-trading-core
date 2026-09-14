@@ -13,13 +13,33 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// TickTrigger - 전략 호출을 무엇이 촉발하는가.
+//   - TriggerPoll: PollInterval 주기로만 호출 (기본, 모든 브로커)
+//   - TriggerOnTrade: 브로커 체결가 스트림의 틱이 올 때마다 호출. 틱이 몰리면 하나로 합치고 MinTickInterval 보다 촘촘히는
+//     부르지 않는다. 폴링은 안전망으로 계속 돈다. 브로커가 StreamTrades 를 선언하지 않으면 경고 후 폴링으로 동작한다
+type TickTrigger string
+
+const (
+	TriggerPoll    TickTrigger = ""
+	TriggerOnTrade TickTrigger = "ON_TRADE"
+)
+
 type StrategySpec struct {
 	Name             string
 	Symbols          []string
 	CandleInterval   CandleInterval // 기본 Day1
 	CandleLimit      int            // 기본 30
-	PollInterval     time.Duration  // 기본 60s
+	PollInterval     time.Duration  // 기본 60s (TriggerOnTrade 에서는 스트림이 끊겼을 때의 안전망 주기)
 	RegularHoursOnly *bool          // 기본 true
+	Trigger          TickTrigger    // 기본 TriggerPoll
+	MinTickInterval  time.Duration  // TriggerOnTrade 에서 연속 호출 사이 최소 간격. 기본 1s
+}
+
+func (s StrategySpec) minTickInterval() time.Duration {
+	if s.MinTickInterval <= 0 {
+		return time.Second
+	}
+	return s.MinTickInterval
 }
 
 func (s StrategySpec) candleInterval() CandleInterval {

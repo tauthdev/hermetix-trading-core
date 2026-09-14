@@ -1,8 +1,8 @@
 # Hermetix JavaScript/TypeScript
 
-증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 18+).
+증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 22+). 버전 0.8.0
 
-의존성은 `decimal.js` 하나입니다 — JS 의 부동소수점(0.1+0.2≠0.3)으로 돈을 계산하지 않기 위한 필수 선택. **금액에 number 를 절대 섞지 마세요.**
+의존성은 `decimal.js` 하나입니다 — JS 의 부동소수점(0.1+0.2≠0.3)으로 돈을 계산하지 않기 위한 필수 선택. **금액에 number 를 절대 섞지 마세요.** 실시간 웹소켓은 Node 22 내장 `WebSocket` 을 써서 추가 의존성이 없습니다.
 
 ## 빠른 시작
 
@@ -55,6 +55,23 @@ await new StrategyEngine(broker, [strategy], 5, {
 - 넥스트증권은 키 프리픽스가 환경을 결정합니다 (`pk_test_`=모의, `pk_live_`=실전). `new NextClient(id, secret, account, baseUrl, "LIVE")` 에서 어긋나면 throw
 - 심볼에 시장 접두를 붙일 수 있습니다 (`KRX:005930`, `US:AAPL`). 접두 없는 심볼은 브로커 기본 시장으로 해석됩니다
 - 키는 항상 당신의 기기에서만 쓰입니다. Hermetix 는 어떤 서버로도 키를 보내지 않습니다
+
+## 실시간 체결가 트리거 (0.8.0)
+
+`spec.trigger = "ON_TRADE"` 로 선언하면 브로커 웹소켓 체결가 틱마다 전략을 호출합니다. 전략 코드는 바뀌지 않습니다.
+
+```ts
+const strategy = {
+  spec: { name: "scalp", symbols: ["005930"], trigger: "ON_TRADE", minTickIntervalMs: 1000 },
+  decide(ctx) { /* ctx.quote("005930") 은 마지막 체결 틱(가격·호가·누적거래량) */ return []; },
+};
+await new StrategyEngine(new KisClient(appkey, appsecret, cano), [strategy]).run();
+```
+
+- 지원 브로커: `kis`(H0STCNT0)·`kiwoom`(0B) — 2026-09 모의 웹소켓 장중 실측. 넥스트증권은 공개 스펙에 웹소켓이 없어 폴링만
+- 몰려온 틱은 하나로 합치고 `minTickIntervalMs`(기본 1000) 보다 촘촘히는 부르지 않습니다. 캔들·계좌·미체결은 여전히 REST 라 틱마다 `1 + 심볼 수 + 3` 호출이 나갑니다
+- 스트림이 끊기면 지수 백오프로 재접속하고 구독을 복원하며, 그동안 `pollIntervalSeconds` 폴링이 안전망으로 돕니다. 스트림을 선언하지 않은 브로커에서는 경고 후 폴링으로 동작합니다
+- Node 22+ 필요 (내장 `WebSocket`). 테스트의 가짜 서버만 `ws` 를 devDependency 로 씁니다
 
 ## 공식 전략 예제 (examples/)
 

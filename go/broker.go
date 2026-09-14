@@ -37,6 +37,29 @@ type BrokerClient interface {
 	GetFills() ([]Fill, error)
 }
 
+// TradeListener - 체결 틱 수신자. 스트림 고루틴에서 호출되므로 오래 걸리는 일은 하지 않는다 (엔진은 루프로 넘긴다).
+type TradeListener func(TradeTick)
+
+// MarketStream - 실시간 시장 데이터 스트림. 규약:
+//   - Connect 후 연결이 끊기면 스스로 지수 백오프로 재연결하고, 재연결 시 기존 구독을 다시 보낸다
+//   - SubscribeTrades 는 연결 전에 불러도 된다 — 연결되는 순간 전송된다
+//   - 리스너가 panic 해도 스트림은 로그만 남기고 계속 간다
+//   - Close 뒤에는 재연결하지 않는다
+type MarketStream interface {
+	// IsConnected - 소켓이 열려 있고 (브로커가 요구하면) 로그인까지 끝났는지
+	IsConnected() bool
+	Connect()
+	SubscribeTrades(symbols []string, listener TradeListener)
+	Close() error
+}
+
+// StreamingBrokerClient - 실시간 스트림을 제공하는 어댑터. Capabilities().Streams 가 비어있지 않은 어댑터만 구현한다.
+type StreamingBrokerClient interface {
+	BrokerClient
+	// OpenStream - 새 스트림 인스턴스. 연결은 호출자가 Connect 로 시작한다
+	OpenStream() MarketStream
+}
+
 // httpJSON - (status, parsedJSON) 반환. 4xx/5xx 도 본문 파싱.
 func httpJSON(client *http.Client, method, rawURL string, headers map[string]string, body []byte) (int, map[string]any, error) {
 	var reader io.Reader

@@ -28,6 +28,8 @@ type KisClient struct {
 	appkey, appsecret, cano, acntPrdtCd string
 	baseURL                             string
 	customBaseURL                       bool
+	wsURL                               string
+	customWsURL                         bool
 	environment                         TradingEnvironment
 	http                                *http.Client
 	limiter                             *rateLimiter
@@ -48,6 +50,7 @@ func NewKisClient(appkey, appsecret, cano string) *KisClient {
 	c := &KisClient{
 		appkey: appkey, appsecret: appsecret, cano: cano, acntPrdtCd: "01",
 		baseURL:     KisPaperURL,
+		wsURL:       KisWsPaperURL,
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
 		limiter:     newRateLimiter(600*time.Millisecond, 3, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second }),
@@ -74,6 +77,12 @@ func (c *KisClient) SetEnvironment(env TradingEnvironment) *KisClient {
 			c.baseURL = KisLiveURL
 		}
 	}
+	if !c.customWsURL {
+		c.wsURL = KisWsPaperURL
+		if env == Live {
+			c.wsURL = KisWsLiveURL
+		}
+	}
 	interval := 600 * time.Millisecond
 	if env == Live {
 		interval = 100 * time.Millisecond
@@ -85,6 +94,13 @@ func (c *KisClient) SetEnvironment(env TradingEnvironment) *KisClient {
 // SetThrottle - 호출 간 최소 간격 직접 지정 (테스트용).
 func (c *KisClient) SetThrottle(interval time.Duration) *KisClient {
 	c.limiter = newRateLimiter(interval, 3, func(attempt int) time.Duration { return time.Duration(attempt) * time.Second })
+	return c
+}
+
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시 — 모의 ws://ops…:31000, 실전 :21000).
+func (c *KisClient) SetWSURL(wsURL string) *KisClient {
+	c.wsURL = wsURL
+	c.customWsURL = true
 	return c
 }
 
@@ -110,7 +126,34 @@ func (c *KisClient) Capabilities() BrokerCapabilities {
 		FractionalShares: false,
 		ServerOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
 		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true},
+		Streams:          []StreamChannel{StreamTrades}, // H0STCNT0 체결가 — 2026-09 모의 실측
 	}
+}
+
+// ------------------------------------------------------------------- stream
+
+// OpenStream - 체결가 웹소켓 스트림. 접속키는 접속마다 ApprovalKey 로 새로 받는다.
+func (c *KisClient) OpenStream() MarketStream {
+	return newKisMarketStream(c.wsURL, "P", c.ApprovalKey)
+}
+
+// ApprovalKey - 웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고
+// 문서상 유효기간이 명시돼 있지 않다. 필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의.
+func (c *KisClient) ApprovalKey() (string, error) {
+	c.limiter.throttle.wait()
+	payload, _ := json.Marshal(map[string]string{
+		"grant_type": "client_credentials", "appkey": c.appkey, "secretkey": c.appsecret,
+	})
+	status, body, err := httpJSON(c.http, "POST", c.baseURL+"/oauth2/Approval",
+		map[string]string{"Content-Type": "application/json"}, payload)
+	if err != nil {
+		return "", err
+	}
+	key := str(body["approval_key"])
+	if status < 200 || status >= 300 || key == "" {
+		return "", newAuthError(status, str(body["error_code"]), "KIS 웹소켓 접속키 발급 실패: "+str(body["error_description"]))
+	}
+	return key, nil
 }
 
 // ------------------------------------------------------------------- market

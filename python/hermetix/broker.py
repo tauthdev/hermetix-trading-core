@@ -15,12 +15,13 @@ import urllib.request
 from abc import ABC, abstractmethod
 from decimal import Decimal
 from datetime import timedelta
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from .models import (
     TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, Quote, SessionHours,
+    Fill, Holding, MarketDay, Order, Quote, SessionHours, TradeTick,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -70,6 +71,43 @@ class BrokerClient(ABC):
 
     @abstractmethod
     def get_fills(self) -> list[Fill]: ...
+
+
+TradeListener = Callable[[TradeTick], None]
+
+
+class MarketStream(ABC):
+    """실시간 시장 데이터 스트림. 규약:
+
+    - connect() 후 연결이 끊기면 스스로 지수 백오프로 재연결하고, 재연결 시 기존 구독을 다시 보낸다
+    - subscribe_trades() 는 연결 전에 불러도 된다 - 연결되는 순간 전송된다
+    - 리스너는 스트림 스레드에서 호출된다. 오래 걸리는 일은 리스너 안에서 하지 말 것 (엔진은 루프로 넘긴다)
+    - 리스너가 던진 예외는 스트림이 삼키고 로그만 남긴다
+    - close() 뒤에는 재연결하지 않는다
+    """
+
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """소켓이 열려 있고 (브로커가 요구하면) 로그인까지 끝났는지"""
+
+    @abstractmethod
+    def connect(self) -> None: ...
+
+    @abstractmethod
+    def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+
+class StreamingBrokerClient(BrokerClient):
+    """실시간 스트림을 제공하는 브로커 어댑터. capabilities.streams 가 비어있지 않은 어댑터만 구현한다.
+    엔진은 isinstance(broker, StreamingBrokerClient) 와 capabilities 둘 다 확인한다."""
+
+    @abstractmethod
+    def open_stream(self) -> MarketStream:
+        """새 스트림 인스턴스를 만든다. 연결은 호출자가 MarketStream.connect() 로 시작한다"""
 
 
 class _Http:

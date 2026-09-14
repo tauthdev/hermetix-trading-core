@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermetix"
-version = "0.2.0"
+version = "0.8.0"
 description = "증권사 모의투자 통합 트레이딩 프레임워크 - Python"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "websockets>=12"]
+# 실시간 체결가 스트림 (kis/kiwoom ON_TRADE) - 코어는 여전히 의존성 0
+stream = ["websockets>=12"]
 
 [tool.setuptools.packages.find]
 include = ["hermetix*"]

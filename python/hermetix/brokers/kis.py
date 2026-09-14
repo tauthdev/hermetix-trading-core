@@ -18,13 +18,14 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError
 from ..models import (
     TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote,
+    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote, StreamChannel,
 )
+from .kis_stream import KisMarketStream
 
 
 def _d(value, default: str = "0") -> Decimal:
@@ -48,7 +49,7 @@ class _Tracked:
     day: date
 
 
-class KisClient(BrokerClient):
+class KisClient(StreamingBrokerClient):
 
     capabilities = BrokerCapabilities(
         broker_id="kis",
@@ -60,6 +61,7 @@ class KisClient(BrokerClient):
         fractional_shares=False,
         server_open_orders=False,  # 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
+        streams=frozenset({StreamChannel.TRADES}),  # H0STCNT0 체결가 - 2026-09 모의 실측
     )
 
     def _tr(self, suffix: str) -> str:
@@ -68,15 +70,19 @@ class KisClient(BrokerClient):
 
     PAPER_URL = "https://openapivts.koreainvestment.com:29443"
     LIVE_URL = "https://openapi.koreainvestment.com:9443"
+    PAPER_WS_URL = "ws://ops.koreainvestment.com:31000"
+    LIVE_WS_URL = "ws://ops.koreainvestment.com:21000"
 
     def __init__(self, appkey: str, appsecret: str, cano: str, acnt_prdt_cd: str = "01",
                  custtype: str = "P", base_url: str = "",
                  throttle_seconds: float = 0.0,
-                 environment: TradingEnvironment = TradingEnvironment.PAPER):
+                 environment: TradingEnvironment = TradingEnvironment.PAPER,
+                 ws_url: str = ""):
         """base_url 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
         throttle_seconds 0 이면 자동 — 모의 0.6(초당 2건), 실전 0.1(초당 20건 한도의 절반).
-        계좌 TR ID 는 모의 V / 실전 T 프리픽스."""
+        계좌 TR ID 는 모의 V / 실전 T 프리픽스. ws_url 을 비우면 실시간 웹소켓은 모의 ops:31000 / 실전 ops:21000."""
         self.environment = environment
+        self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
         self._appkey = appkey
         self._appsecret = appsecret
         self._cano = cano
@@ -303,6 +309,23 @@ class KisClient(BrokerClient):
                 raise AuthError(status, code, msg)
             raise BrokerApiError(status, code, msg)
         return parsed
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        return KisMarketStream(self._ws_url, self._custtype, self.approval_key)
+
+    def approval_key(self) -> str:
+        """웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 - 접속마다 새로 받아도 무방하다.
+        필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의."""
+        self._limiter.throttle.wait()
+        status, body = self._http.request(
+            "POST", "/oauth2/Approval",
+            json_body={"grant_type": "client_credentials", "appkey": self._appkey, "secretkey": self._appsecret})
+        if status != 200 or not body.get("approval_key"):
+            raise AuthError(status, body.get("error_code"),
+                            f"KIS 웹소켓 접속키 발급 실패: {body.get('error_description', '')}")
+        return body["approval_key"]
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:

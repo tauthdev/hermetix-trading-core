@@ -10,9 +10,19 @@ export interface StrategySpec {
   symbols: string[];
   candleInterval?: CandleInterval;       // 기본 "1d"
   candleLimit?: number;                  // 기본 30
-  pollIntervalSeconds?: number;          // 기본 60
+  pollIntervalSeconds?: number;          // 기본 60 (ON_TRADE 에서는 스트림이 끊겼을 때의 안전망 주기)
   regularHoursOnly?: boolean;            // 기본 true
+  trigger?: TickTrigger;                 // 기본 "POLL"
+  minTickIntervalMs?: number;            // 기본 1000 — ON_TRADE 연속 호출 사이 최소 간격 (캔들·계좌 REST 폭주 방지)
 }
+
+/**
+ * 전략 호출을 무엇이 촉발하는가.
+ * - POLL: pollIntervalSeconds 주기로만 호출 (기본, 모든 브로커)
+ * - ON_TRADE: 브로커 체결가 스트림의 틱마다 호출. 몰린 틱은 하나로 합치고 minTickIntervalMs 보다 촘촘히는 부르지 않는다.
+ *   폴링은 안전망으로 계속 돈다. 브로커가 TRADES 채널을 선언하지 않으면 경고 후 POLL 로 동작
+ */
+export type TickTrigger = "POLL" | "ON_TRADE";
 
 /** 매수 진입. takeProfit/stopLoss 지정 시 엔진이 자동 청산 (소프트웨어 브라켓 - 재시작 시 소실). */
 export interface Buy {

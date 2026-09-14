@@ -7,8 +7,10 @@
  */
 import { Decimal } from "decimal.js";
 import {
-  BrokerClient, D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd,
+  D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd,
 } from "../broker.js";
+import type { MarketStream, StreamingBrokerClient } from "../broker.js";
+import { KiwoomMarketStream } from "./kiwoomStream.js";
 import { AuthError, BrokerApiError, MarketClosedError, OrderNotFoundError, RateLimitError } from "../errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
@@ -27,7 +29,7 @@ const signedOrNull = (v: unknown): Decimal | null => {
   try { return new Decimal(String(v).trim().replace(/^\+/, "")); } catch { return null; }
 };
 
-export class KiwoomClient implements BrokerClient {
+export class KiwoomClient implements StreamingBrokerClient {
   readonly capabilities: BrokerCapabilities = {
     brokerId: "kiwoom",
     market: "KRX",
@@ -38,6 +40,7 @@ export class KiwoomClient implements BrokerClient {
     fractionalShares: false,
     serverOpenOrders: true, // ka10075 미체결 조회 제공
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
+    streams: new Set(["TRADES"]), // 0B 주식체결 — 2026-09 모의 실측
   };
 
   private token: string | null = null;
@@ -47,17 +50,22 @@ export class KiwoomClient implements BrokerClient {
 
   static readonly PAPER_URL = "https://mockapi.kiwoom.com";
   static readonly LIVE_URL = "https://api.kiwoom.com";
+  static readonly PAPER_WS_URL = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket";
+  static readonly LIVE_WS_URL = "wss://api.kiwoom.com:10000/api/dostk/websocket";
   readonly baseUrl: string;
+  readonly wsUrl: string;
 
-  /** baseUrl 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통 */
+  /** baseUrl 을 비우면 환경에 따라 결정(모의 mockapi / 실전 api.kiwoom.com). TR ID 는 공통. wsUrl 도 비우면 환경에 따라 결정 */
   constructor(
     private readonly appkey: string,
     private readonly secretkey: string,
     baseUrl: string = "",
     throttleMs = 1100,
     readonly environment: TradingEnvironment = "PAPER",
+    wsUrl: string = "",
   ) {
     this.baseUrl = baseUrl || (environment === "LIVE" ? KiwoomClient.LIVE_URL : KiwoomClient.PAPER_URL);
+    this.wsUrl = wsUrl || (environment === "LIVE" ? KiwoomClient.LIVE_WS_URL : KiwoomClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1100 * attempt);
   }
 
@@ -198,6 +206,13 @@ export class KiwoomClient implements BrokerClient {
       quantity: D(r.cntr_qty),
       price: r.cntr_pric ? signed(r.cntr_pric).abs() : null,
     }));
+  }
+
+  // ---------------------------------------------------------------- stream
+
+  /** 웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 getToken 이 갱신한다 */
+  openStream(): MarketStream {
+    return new KiwoomMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   // -------------------------------------------------------------- internal

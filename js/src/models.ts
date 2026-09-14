@@ -151,4 +151,39 @@ export interface BrokerCapabilities {
   environments?: ReadonlySet<TradingEnvironment>;
   /** 한 계좌로 다룰 수 있는 시장 목록 (MARKET:CODE 접두 허용 값). 생략 시 {market} */
   markets?: ReadonlySet<string>;
+  /** 실시간 스트림 채널. 생략/빈 집합이면 폴링만. 선언한 어댑터는 StreamingBrokerClient 를 구현해야 한다 */
+  streams?: ReadonlySet<StreamChannel>;
+}
+
+/** 브로커가 제공하는 실시간 스트림 채널 (BrokerCapabilities.streams 로 선언) */
+export type StreamChannel = "TRADES";
+
+/**
+ * 체결 1건 — 브로커 프레임을 공통 모델로 정규화한 것.
+ * symbol 은 구독 요청 표기 그대로 (`KRX:005930` 으로 구독하면 `KRX:005930`). quantity 는 이 체결의 수량, cumulativeVolume 은 당일 누적
+ */
+export interface TradeTick {
+  symbol: string;
+  price: Decimal;
+  quantity: Decimal;
+  timestamp: Date;
+  bidPrice?: Decimal | null;
+  askPrice?: Decimal | null;
+  cumulativeVolume?: number | null;
+  change?: Decimal | null;
+  changeRate?: Decimal | null;
+}
+
+/** 스트림 틱을 REST 현재가와 같은 모양으로 — 엔진이 quotes 호출을 아낄 때 쓴다 */
+export function tradeTickToQuote(tick: TradeTick): Quote {
+  return {
+    symbol: tick.symbol,
+    price: tick.price,
+    bidPrice: tick.bidPrice ?? null,
+    askPrice: tick.askPrice ?? null,
+    volume: tick.cumulativeVolume ?? 0,
+    change: tick.change ?? null,
+    changeRate: tick.changeRate ?? null,
+    timestamp: tick.timestamp,
+  };
 }

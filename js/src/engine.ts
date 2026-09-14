@@ -1,10 +1,10 @@
 /** 전략 실행 엔진 - 매 틱: 장시간 확인 -> 스냅샷 -> 브라켓 점검 -> 전략 호출 -> 시그널 실행. */
 import { Decimal } from "decimal.js";
-import type { BrokerClient } from "./broker.js";
-import { sleep } from "./broker.js";
+import type { BrokerClient, MarketStream } from "./broker.js";
+import { isStreamingBrokerClient, sleep } from "./broker.js";
 import { InsufficientFundsError, MarketClosedError, RateLimitError } from "./errors.js";
-import type { Holding, MarketDay, Order, TradingEnvironment } from "./models.js";
-import { isOpenStatus } from "./models.js";
+import type { Holding, MarketDay, Order, Quote, TradeTick, TradingEnvironment } from "./models.js";
+import { isOpenStatus, tradeTickToQuote } from "./models.js";
 import type { Buy, Sell, Signal, Strategy } from "./strategy.js";
 import { StrategyContext } from "./strategy.js";
 
@@ -296,7 +296,13 @@ export interface EngineOptions {
   maxDailyOrderValue?: Decimal;
 }
 
-/** 등록된 전략들을 각자의 pollInterval 로 순차 호출한다. */
+/**
+ * 등록된 전략들을 각자의 pollInterval 로 순차 호출한다.
+ *
+ * 실시간 트리거(trigger: "ON_TRADE"): 브로커가 StreamingBrokerClient 이고 TRADES 채널을 선언하면 전략 심볼의 체결가 스트림을 구독하고,
+ * 틱마다 tick 을 단일 실행 큐에 넣는다. 대기 중인 틱이 있으면 합치고, 직전 tick 종료 후 minTickIntervalMs 가 지나야 다음을 돌린다.
+ * 스트림 틱이 모든 심볼을 덮으면 quotes REST 호출 대신 마지막 틱을 현재가로 쓴다. 폴링은 안전망으로 계속 돈다.
+ */
 export class StrategyEngine {
   readonly guard: TradingGuard;
   readonly brackets: BracketMonitor;
@@ -305,6 +311,21 @@ export class StrategyEngine {
   readonly risk: RiskGuard;
   readonly strategies: Strategy[];
   private stopped = false;
+  /** 체결가 스트림 (ON_TRADE 전략이 있고 브로커가 지원할 때만 연다) */
+  private stream: MarketStream | null = null;
+  private streamsAttached = false;
+  /** 심볼(요청 표기) → 마지막 체결 틱 */
+  private readonly latestTrades = new Map<string, TradeTick>();
+  /** 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용) */
+  private readonly pendingTicks = new Set<string>();
+  /** 전략 이름 → 직전 tick 종료 시각 (epoch ms) */
+  private readonly lastTickEndedAt = new Map<string, number>();
+  private readonly tickTimers = new Set<NodeJS.Timeout>();
+  /** tick 은 절대 동시에 돌지 않는다 — 폴링·스트림 모두 이 체인을 통과한다 */
+  private tickChain: Promise<void> = Promise.resolve();
+
+  /** 스트림이 열려 있고 로그인까지 끝났는지 — 상태 확인용 */
+  get streamConnected(): boolean { return this.stream?.isConnected === true; }
 
   constructor(readonly broker: BrokerClient, strategies: Strategy[], maxConsecutiveFailures = 5, options: EngineOptions = {}) {
     this.guard = new TradingGuard(broker, maxConsecutiveFailures);
@@ -344,11 +365,12 @@ export class StrategyEngine {
 
   /** 블로킹 실행 루프. stop() 으로 종료. */
   async run(): Promise<void> {
+    this.attachStreams();
     const nextRun = new Map(this.strategies.map((s) => [s.spec.name, 0]));
     while (!this.stopped) {
       for (const strategy of this.strategies) {
         if (Date.now() >= (nextRun.get(strategy.spec.name) ?? 0)) {
-          await this.tick(strategy);
+          await this.runExclusive(() => this.tick(strategy));
           nextRun.set(strategy.spec.name, Date.now() + (strategy.spec.pollIntervalSeconds ?? 60) * 1000);
         }
       }
@@ -356,7 +378,74 @@ export class StrategyEngine {
     }
   }
 
-  stop(): void { this.stopped = true; }
+  stop(): void {
+    this.stopped = true;
+    for (const t of this.tickTimers) clearTimeout(t);
+    this.tickTimers.clear();
+    try { this.stream?.close(); } catch { /* 무시 */ }
+  }
+
+  /** ON_TRADE 전략을 체결가 스트림에 붙인다 (한 번만). 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다 */
+  attachStreams(): void {
+    if (this.streamsAttached) return;
+    this.streamsAttached = true;
+    for (const strategy of this.strategies) {
+      const spec = strategy.spec;
+      if (spec.trigger !== "ON_TRADE") continue;
+      const broker = this.broker;
+      if (!isStreamingBrokerClient(broker) || !broker.capabilities.streams?.has("TRADES")) {
+        log.warn(`[${spec.name}] trigger=ON_TRADE 이지만 브로커 '${broker.capabilities.brokerId}' 는 체결가 스트림을 제공하지 않습니다 - ` +
+          `pollIntervalSeconds=${spec.pollIntervalSeconds ?? 60} 폴링으로 동작합니다`);
+        continue;
+      }
+      if (!this.stream) {
+        this.stream = broker.openStream();
+        this.stream.connect();
+      }
+      this.stream.subscribeTrades(spec.symbols, (tick) => {
+        this.latestTrades.set(tick.symbol, tick);
+        this.requestTick(strategy);
+      });
+      log.info(`[${spec.name}] trade stream attached / symbols=${spec.symbols.join(",")} minTickIntervalMs=${spec.minTickIntervalMs ?? 1000}`);
+    }
+  }
+
+  /**
+   * 스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 최소 간격은 실행 직전에 다시 확인한다 —
+   * 틱이 tick 실행 도중 도착하면 스케줄 시점의 "직전 종료 시각" 이 아직 갱신 전이기 때문
+   */
+  requestTick(strategy: Strategy): void {
+    if (this.stopped) return;
+    const name = strategy.spec.name;
+    if (this.pendingTicks.has(name)) return;
+    this.pendingTicks.add(name);
+    this.scheduleStreamTick(strategy);
+  }
+
+  private scheduleStreamTick(strategy: Strategy): void {
+    const timer = setTimeout(() => {
+      this.tickTimers.delete(timer);
+      void this.runExclusive(async () => {
+        if (this.stopped) return;
+        if (this.remainingInterval(strategy) > 0) { this.scheduleStreamTick(strategy); return; }
+        this.pendingTicks.delete(strategy.spec.name);
+        await this.tick(strategy);
+      });
+    }, this.remainingInterval(strategy));
+    this.tickTimers.add(timer);
+  }
+
+  /** 직전 tick 종료 후 minTickIntervalMs 까지 남은 ms (0 이면 바로 실행 가능) */
+  private remainingInterval(strategy: Strategy): number {
+    const min = strategy.spec.minTickIntervalMs ?? 1000;
+    return Math.max(0, (this.lastTickEndedAt.get(strategy.spec.name) ?? 0) + min - Date.now());
+  }
+
+  private runExclusive(fn: () => Promise<void>): Promise<void> {
+    const next = this.tickChain.then(fn, fn);
+    this.tickChain = next.catch(() => {});
+    return next;
+  }
 
   async tick(strategy: Strategy): Promise<void> {
     const spec = strategy.spec;
@@ -384,18 +473,33 @@ export class StrategyEngine {
         log.error(`[${spec.name}] tick failed: ${e}`);
         await this.guard.recordFailure(e);
       }
+    } finally {
+      this.lastTickEndedAt.set(spec.name, Date.now());
     }
+  }
+
+  /** ON_TRADE 전략의 모든 심볼에 스트림 틱이 있으면 그것을 현재가로 쓴다 (REST quotes 1회 절약). 하나라도 없으면 null → REST */
+  private streamQuotes(spec: Strategy["spec"]): Map<string, Quote> | null {
+    if (spec.trigger !== "ON_TRADE" || !this.stream) return null;
+    const quotes = new Map<string, Quote>();
+    for (const symbol of spec.symbols) {
+      const tick = this.latestTrades.get(symbol);
+      if (!tick) return null;
+      quotes.set(symbol, tradeTickToQuote(tick));
+    }
+    return quotes;
   }
 
   private async buildContext(strategy: Strategy): Promise<StrategyContext> {
     const spec = strategy.spec;
+    const quotes = this.streamQuotes(spec) ?? new Map((await this.broker.getQuotes(spec.symbols)).map((q) => [q.symbol, q]));
     const candles = new Map<string, Awaited<ReturnType<BrokerClient["getCandles"]>>>();
     for (const symbol of spec.symbols) {
       candles.set(symbol, await this.broker.getCandles(symbol, spec.candleInterval ?? "1d", spec.candleLimit ?? 30));
     }
     return new StrategyContext(
       new Date(),
-      new Map((await this.broker.getQuotes(spec.symbols)).map((q) => [q.symbol, q])),
+      quotes,
       candles,
       await this.broker.getAccount(),
       new Map((await this.broker.getHoldings()).map((h) => [h.symbol, h])),

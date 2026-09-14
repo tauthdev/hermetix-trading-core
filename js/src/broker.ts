@@ -3,7 +3,7 @@ import { Decimal } from "decimal.js";
 import { RateLimitError } from "./errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, Quote, TradingEnvironment,
+  Fill, Holding, MarketDay, Order, Quote, TradeTick, TradingEnvironment,
 } from "./models.js";
 
 export interface BrokerClient {
@@ -21,6 +21,32 @@ export interface BrokerClient {
   getOrder(orderId: string): Promise<Order>;
   cancelOrder(orderId: string): Promise<Order>;
   getFills(): Promise<Fill[]>;
+}
+
+export type TradeListener = (tick: TradeTick) => void;
+
+/**
+ * 실시간 시장 데이터 스트림. 규약:
+ * - connect() 후 연결이 끊기면 스스로 지수 백오프로 재연결하고, 재연결 시 기존 구독을 다시 보낸다
+ * - subscribeTrades 는 연결 전에 불러도 된다 — 연결되는 순간 전송된다
+ * - 리스너 예외는 스트림이 삼키고 로그만 남긴다. close() 뒤에는 재연결하지 않는다
+ */
+export interface MarketStream {
+  /** 소켓이 열려 있고 (브로커가 요구하면) 로그인까지 끝났는지 */
+  readonly isConnected: boolean;
+  connect(): void;
+  subscribeTrades(symbols: string[], listener: TradeListener): void;
+  close(): void;
+}
+
+/** 실시간 스트림을 제공하는 어댑터. capabilities.streams 가 비어있지 않은 어댑터만 구현한다 — 엔진은 둘 다 확인한다 */
+export interface StreamingBrokerClient extends BrokerClient {
+  /** 새 스트림 인스턴스. 연결은 호출자가 connect() 로 시작한다 */
+  openStream(): MarketStream;
+}
+
+export function isStreamingBrokerClient(broker: BrokerClient): broker is StreamingBrokerClient {
+  return typeof (broker as StreamingBrokerClient).openStream === "function";
 }
 
 /** fetch 기반 최소 HTTP - (status, parsedJson) 반환. 4xx/5xx 도 본문 파싱. */

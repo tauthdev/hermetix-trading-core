@@ -175,6 +175,36 @@ class Fill:
     price: Decimal | None
 
 
+class StreamChannel(Enum):
+    """브로커가 제공하는 실시간 스트림 채널. BrokerCapabilities.streams 로 선언한다."""
+    TRADES = "TRADES"  # 체결가 스트림 - 체결이 일어날 때마다 TradeTick
+
+
+@dataclass(frozen=True)
+class TradeTick:
+    """체결 1건. 브로커 프레임을 공통 모델로 정규화한 것.
+
+    - symbol 은 구독 요청 표기 그대로 돌려준다 (KRX:005930 으로 구독하면 KRX:005930)
+    - quantity 는 이 체결의 수량, cumulative_volume 은 당일 누적 거래량
+    - 호가·등락은 프레임에 있으면 채우고 없으면 None
+    """
+    symbol: str
+    price: Decimal
+    quantity: Decimal
+    timestamp: datetime
+    bid_price: Decimal | None = None
+    ask_price: Decimal | None = None
+    cumulative_volume: int | None = None
+    change: Decimal | None = None
+    change_rate: Decimal | None = None
+
+    def to_quote(self) -> Quote:
+        """스트림 틱을 REST 현재가와 같은 모양으로 - 엔진이 quotes 호출을 아낄 때 쓴다"""
+        return Quote(symbol=self.symbol, price=self.price, bid_price=self.bid_price, ask_price=self.ask_price,
+                     volume=self.cumulative_volume or 0, change=self.change, change_rate=self.change_rate,
+                     timestamp=self.timestamp)
+
+
 @dataclass(frozen=True)
 class BrokerCapabilities:
     """브로커가 지원하는 기능의 코드 선언. 실측으로 확인한 것만 True 로 선언한다."""
@@ -190,6 +220,8 @@ class BrokerCapabilities:
     environments: frozenset[TradingEnvironment] = frozenset({TradingEnvironment.PAPER})
     # 한 계좌로 다룰 수 있는 시장 목록 (MARKET:CODE 접두 허용 값). None 이면 {market}
     markets: frozenset[str] | None = None
+    # 실시간 스트림 채널. 비어있으면 폴링만. 선언한 어댑터는 StreamingBrokerClient 를 구현해야 한다
+    streams: frozenset[StreamChannel] = frozenset()
 
     def __post_init__(self):
         if self.markets is None:
