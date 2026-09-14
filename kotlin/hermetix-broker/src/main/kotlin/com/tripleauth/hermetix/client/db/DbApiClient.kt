@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.tripleauth.hermetix.broker.AuthError
 import com.tripleauth.hermetix.broker.BrokerApiException
 import com.tripleauth.hermetix.broker.BrokerCapabilities
-import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.InsufficientFundsError
 import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.KrxCalendar
@@ -64,7 +66,7 @@ import java.time.format.DateTimeFormatter
 class DbApiClient(
     private val properties: DbApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -78,6 +80,8 @@ class DbApiClient(
         fractionalShares = false,
         serverOpenOrders = true, // transaction-history 로 당일 미체결 조회
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
+        // 웹소켓 S00 체결·S01 호가·IS0/IS1 주문 통보 — 문서 기반, 실측 전
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -354,6 +358,11 @@ class DbApiClient(
                 }
                 node
             }!!
+
+    // ------------------------------------------------------------------ stream
+
+    /** 웹소켓은 REST 접근토큰을 매 구독 메시지 헤더에 싣는다 — 재접속 시 [token] 이 갱신한다 */
+    override fun openStream(): MarketStream = DbMarketStream(properties, objectMapper, ::token)
 
     private fun token(): String {
         val cached = cachedToken
