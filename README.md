@@ -62,7 +62,7 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 | Kotlin/JVM (레퍼런스) | `kotlin/` | 0.10.0 | Spring Boot | JitPack (아래) |
 | [Python](python/) | `python/` | 0.10.0 | 0개 (stdlib, 3.10+) · 실시간은 `websockets` 선택 설치 | `pip install ./python` (실시간: `pip install './python[stream]'`) |
 | [JavaScript/TypeScript](js/) | `js/` | 0.10.0 | decimal.js (Node 22+, 실시간은 내장 WebSocket) | `npm install ./js` |
-| [Go](go/) | `go/` | — | shopspring/decimal · 웹소켓 라이브러리 1개 | `go get github.com/tauthdev/hermetix-trading-core/go` |
+| [Go](go/) | `go/` | 0.10.0 (태그 `go/v0.10.0`) | shopspring/decimal · 웹소켓 라이브러리 1개 | `go get github.com/tauthdev/hermetix-trading-core/go@v0.10.0` |
 
 Python/JS 는 아직 PyPI/npm 에 올리지 않아 레포 경로로 설치합니다.
 
