@@ -4,14 +4,14 @@
 
 ## 1. 전략의 생명주기
 
-엔진은 앱 기동 시 `TradingStrategy` 를 구현한 모든 스프링 빈을 찾아 각자의 `pollInterval` 주기로 `decide()` 를 호출합니다.
+엔진은 앱 기동 시 `TradingStrategy` 를 구현한 모든 스프링 빈을 찾아 각자의 `pollInterval` 주기로 `decide()` 를 호출합니다. `trigger = TickTrigger.ON_TRADE` 인 전략은 여기에 더해 브로커 체결가 스트림의 틱마다 호출됩니다 (폴링은 안전망으로 유지).
 
 ```
 앱 기동 → 전략 빈 발견 → 스케줄 등록
 매 틱:
   1. 비상정지 상태면 스킵
   2. 장시간 체크 (regularHoursOnly=true 면 브로커 시장의 정규장에만 진행 — next: 미국장 09:30–16:00 ET, kis/kiwoom: KRX 09:00–15:30 KST)
-  3. StrategyContext 구성 (시세/캔들/계좌/보유/미체결 API 조회)
+  3. StrategyContext 구성 (시세/캔들/계좌/보유/미체결 API 조회 — 스트림 틱이 모든 심볼을 덮으면 시세는 틱에서, orderBook=true 면 최신 호가창도 포함)
   4. 소프트웨어 브라켓 점검 (익절/손절 도달 시 자동 청산 — 전략 호출보다 우선)
   5. strategy.decide(context) 호출
   6. 반환된 Signal 목록을 순서대로 실행
@@ -51,9 +51,10 @@ override val spec = StrategySpec(
 | `holding(symbol)` / `hasPosition(symbol)` | 보유 포지션 | `avgEntryPrice` 는 계좌 전체 평균 매입 단가 |
 | `openOrders(symbol)` / `hasOpenOrder(symbol)` | 미체결 주문 | 취소하려면 `orderId` 를 `Signal.Cancel` 로 |
 | `buyingPower` | 주문 가능 현금 | 수량 계산의 기준 |
+| `orderBook(symbol)` | 최신 호가창 (10단계) | `orderBook = true` 전략에만, 스트림이 한 번이라도 준 심볼만. `bestAsk`/`bestBid`/`asks`/`bids`/총잔량. 없으면 null (0.9.0, kis·kiwoom 실측, nh·db·ls·toss 문서 기반) |
 | `account` | 계좌 정보 | `cash`, `portfolioValue` |
 
-심볼 조회 메서드(`quote`/`candles`/`holding`/`hasPosition`/`openOrders`)는 `MARKET:CODE` 접두 유무를 무시하고 코드로 맞춥니다. `KRX:005930` 으로 감시하면서 서버가 `005930` 으로 주는 보유/미체결을 그대로 찾을 수 있습니다.
+심볼 조회 메서드(`quote`/`candles`/`holding`/`hasPosition`/`openOrders`/`orderBook`)는 `MARKET:CODE` 접두 유무를 무시하고 코드로 맞춥니다. `KRX:005930` 으로 감시하면서 서버가 `005930` 으로 주는 보유/미체결을 그대로 찾을 수 있습니다.
 
 ## 4. Signal — 의사결정 표현
 

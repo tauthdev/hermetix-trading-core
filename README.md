@@ -66,7 +66,7 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 | [JavaScript/TypeScript](js/) | `js/` | 0.10.0 | decimal.js (Node 22+, 실시간은 내장 WebSocket) | `npm install hermetix` |
 | [Go](go/) | `go/` | 0.10.0 (태그 `go/v0.10.0`) | shopspring/decimal · 웹소켓 라이브러리 1개 | `go get github.com/tauthdev/hermetix-trading-core/go@v0.10.0` |
 
-Python/JS 는 아직 PyPI/npm 에 올리지 않아 레포 경로로 설치합니다.
+네 언어 모두 한 줄 설치입니다. 언어별 사용설명서: [Python](python/README.md) · [JavaScript/TypeScript](js/README.md) · [Go](go/README.md). Kotlin 은 이 문서와 [전략 작성 가이드](docs/strategy-guide.md)가 설명서입니다.
 
 **Kotlin/JVM**:
 
@@ -94,7 +94,7 @@ dependencies {
 ```yaml
 # application.yml
 hermetix:
-  broker: next                   # next | kis | kiwoom
+  broker: next                   # next | kis | kiwoom | nh | db | ls | toss | kb
   next:
     client-id: pk_test_...
     client-secret: sk_test_...
@@ -234,17 +234,71 @@ broker.getHoldings()                                  // 보유 포지션
     ↓ Signal (Buy/Sell/Cancel)
 StrategyEngine                  ← 정규장 스케줄링, 컨텍스트 구성, 브라켓/비상정지
     ↓ BrokerClient 인터페이스
-next / kis / kiwoom 어댑터       ← 인증, 레이트리밋, 방언 정규화
+8개 브로커 어댑터               ← 인증, 레이트리밋, 방언 정규화, (웹소켓 스트림)
 ```
 
 - 엔진은 `pollInterval` 주기로 전략을 호출합니다 — 해당 브로커 시장의 정규장에만 (next=미국장 ET, kis/kiwoom=KRX KST)
-- `orderBook = true` 로 선언한 전략은 심볼 호가창 스트림을 구독해 `context.orderBook(symbol)` 로 10단계 호가·잔량을 받습니다. 브로커가 주문통보 채널을 제공하면 엔진이 자동 구독해 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고, KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다 (KIS 는 `hermetix.kis.hts-id` 필요)
-- `trigger = TickTrigger.ON_TRADE` 로 선언한 전략은 브로커 체결가 스트림(웹소켓)의 틱마다 호출됩니다 — 몰려온 틱은 하나로 합치고 `minTickInterval`(기본 1초)보다 촘촘히는 부르지 않으며, 스트림이 끊기면 `pollInterval` 폴링이 안전망으로 계속 돕니다. 스트림을 선언하지 않은 브로커(next·kb)에서는 경고 후 폴링으로 동작합니다 (kis·kiwoom 모의 실측 완료, nh·db·ls·toss 문서 기반)
+- 실시간이 필요한 전략은 폴링 대신 체결가 스트림으로 호출되고 호가창·주문통보도 받습니다 — 아래 [실시간 스트림](#실시간-스트림)
 - 기동 시 검증: 전략의 캔들 주기를 브로커가 지원하는지, 브로커 환경(모의/실전)이 선언된 것인지, 실전이면 명시 동의가 있는지 — 하나라도 어긋나면 스케줄하지 않습니다
 - `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지). 주문 금액 상한(`hermetix.risk.*`)을 넘는 시그널은 제출하지 않습니다
 - 익절/손절(소프트웨어 브라켓)은 앱 메모리에서 관리됩니다 — 재시작 시 사라지므로 [전략 가이드](docs/strategy-guide.md)의 복원 패턴을 참고하세요
 - 연속 실패가 임계치(기본 5회)에 도달하면 비상정지 — 미체결 전량 취소 후 주문 차단 (휴장·레이트리밋은 카운트 제외)
 - 심볼은 `MARKET:CODE` 접두를 허용합니다 (`KRX:005930`, `US:AAPL`). 어댑터는 코드만 보내고, 컨텍스트 조회는 접두 유무를 무시합니다
+
+## 실시간 스트림
+
+브로커가 웹소켓을 제공하면 폴링 위에 세 채널을 얹을 수 있습니다. 전략 코드는 그대로이고 `StrategySpec` 두 줄만 바뀝니다.
+
+```kotlin
+override val spec = StrategySpec(
+    name = "scalp", symbols = listOf("005930"),
+    trigger = TickTrigger.ON_TRADE,             // 체결가 틱마다 decide() 호출 (기본 POLL)
+    minTickInterval = Duration.ofSeconds(1),    // 연속 호출 최소 간격 — 캔들·계좌 REST 폭주 방지
+    orderBook = true,                           // context.orderBook("005930") 로 10단계 호가·잔량
+)
+```
+
+- **체결가 (TRADES)** — 틱이 몰리면 하나로 합치고, 스트림이 끊기면 `pollInterval` 폴링이 안전망으로 계속 돕니다. 모든 심볼에 틱이 있으면 현재가 REST 호출을 건너뜁니다
+- **호가 (ORDER_BOOK)** — `orderBook = true` 전략에만 구독되며 틱을 촉발하지는 않습니다. `context.orderBook(symbol)?.bestAsk`
+- **주문통보 (ORDER_EVENTS)** — 브로커가 제공하면 엔진이 자동 구독합니다. 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고, KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다. 구독에 실패하면(예: KIS HTS ID 미설정) 경고만 남기고 폴링 판정을 유지합니다
+- 스트림이 없는 브로커(next·kb)나 채널을 선언하지 않은 브로커에서는 경고 후 폴링으로 동작합니다
+
+```yaml
+hermetix:
+  kis:
+    hts-id: ${KIS_HTS_ID:}       # KIS 주문통보 구독 키 (없으면 통보만 생략)
+    # ws-url: ws://...          # 모든 브로커: 환경에 맞는 기본 주소를 덮어쓸 때만
+  nh:
+    market-cd: KRX               # NH 는 시장 설정이 채널을 정합니다 (KRX oc/ob · NXT nc/nb · UNT mc/mb)
+  toss:
+    account-seq: ${TOSS_ACCOUNT_SEQ:}   # 토스 주문통보(personal:order) 키. 비우면 첫 위탁계좌
+```
+
+엔진 없이 연결 계층만으로도 씁니다 (`StreamingBrokerClient`):
+
+```kotlin
+val stream = (broker as StreamingBrokerClient).openStream()
+stream.subscribeTrades(listOf("KRX:005930")) { tick -> println("${tick.symbol} ${tick.price} x${tick.quantity}") }
+stream.subscribeOrderBook(listOf("005930")) { book -> println("ask1=${book.bestAsk} bid1=${book.bestBid}") }
+stream.subscribeOrderEvents { event -> println("${event.type} ${event.orderId} ${event.quantity}@${event.price}") }
+stream.connect()   // 끊기면 지수 백오프로 재접속하고 구독을 복원합니다
+// ... stream.close()
+```
+
+브로커별 상태 — ✅ 모의 웹소켓 장중 실측(2026-09-14) · ⚠️ 공식 문서/SDK 기반 구현, 실측 전 · ❌ 브로커 스펙에 웹소켓 없음:
+
+| 브로커 | 체결가 | 호가 | 주문통보 | 프로토콜·제약 |
+|---|:---:|:---:|:---:|---|
+| `kis` | ✅ | ✅ | ⚠️ | 접속키 `/oauth2/Approval`, 모의 `ws://ops…:31000`. 주문통보는 HTS ID 로 구독하고 AES-256-CBC 프레임을 구독 응답 key/iv 로 복호화 |
+| `kiwoom` | ✅ | ✅ | ⚠️ | REST 토큰으로 LOGIN → REG. 주문체결(00)은 계좌 단위 등록 |
+| `nh` | ⚠️ | ⚠️ | ⚠️ | 채널이 `market-cd` 로 갈림. 모의 서버는 시세 채널 "미제공" 표기(통보만 올 수 있음). 세션당 등록 10~30건, 앱키당 세션 2개 |
+| `db` | ⚠️ | ⚠️ | ⚠️ | 토큰은 메시지 헤더, `tr_key` "J 005930". 접속 후 10초 내 첫 전송 필수, 세션 2개·종목 50개 |
+| `ls` | ⚠️ | ⚠️ | ⚠️ | 서버가 시장을 판별하지 않아 KOSPI·KOSDAQ TR 을 종목마다 둘 다 구독. 토큰 익일 07:00 만료 |
+| `toss` | ⚠️ | ⚠️ | ⚠️ | 실전 전용. 구독 집합 전체를 배열 하나로 선언, Bearer 핸드셰이크, 60초 `PING`. 계정당 연결 2개·구독 100개·선언 5회/초 |
+| `next` | ❌ | ❌ | ❌ | 공개 스펙 v1.3 에 웹소켓 없음 — 폴링 |
+| `kb` | ❌ | ❌ | ❌ | 개인 오픈베타 명세(2026-09) 전부 REST — 폴링 |
+
+⚠️ 항목은 공식 문서·SDK·AsyncAPI 예시로 만든 파서라 필드 해석이 틀릴 수 있습니다. 해당 증권사 계좌가 있다면 각 언어의 스모크 테스트(`HERMETIX_RAW_DUMP` 로 원시 프레임 덤프)를 돌려 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)로 프레임을 보내 주세요. 실측 프레임으로 픽스처를 교체하면 ✅ 로 올라갑니다. 프레임 샘플과 기대값은 [컨포먼스 픽스처](conformance/README.md)의 `stream` 섹션에 있습니다.
 
 ## 수익률 확인
 
@@ -273,9 +327,22 @@ hermetix:
 
 <!-- 커뮤니티 전략 목록 -->
 
+## 릴리즈
+
+| 버전 | 내용 |
+|---|---|
+| 0.10.0 | nh·db·ls·toss 실시간 스트림(문서 기반), KB 는 웹소켓 없음 확정. **네 언어 한 줄 설치** — PyPI·npm 등록, Go `go/v0.10.0` 태그 |
+| 0.9.0 | 호가·주문통보 채널, `StrategySpec.orderBook`, 브라켓·KIS 추적에 통보 반영 |
+| 0.8.0 | 실시간 계층 1차 — `MarketStream` SPI, KIS·키움 체결가(모의 실측), `TickTrigger.ON_TRADE` |
+| 0.7.0 | LS·토스·KB 어댑터 (문서 기반) |
+| 0.6.0 | 거래 환경 paper/live, 실전 게이트, 주문 금액 상한, `MARKET:CODE` 심볼 |
+
+태그 = 릴리즈(JitPack). Python·JS 는 같은 번호로 PyPI·npm 에, Go 는 `go/vX.Y.Z` 태그로 올라갑니다. 릴리즈 절차는 수동이며 CI 는 두지 않습니다.
+
 ## 문서
 
-- [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스, 패턴, 안전장치, 테스트, 트러블슈팅
+- 언어별 사용설명서 — [Python](python/README.md) · [JavaScript/TypeScript](js/README.md) · [Go](go/README.md)
+- [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스(Kotlin), 패턴, 안전장치, 테스트, 트러블슈팅
 - [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 거래 환경·RiskGuard·심볼 규약, 어댑터 비교표, 상태 지도
 - [컨포먼스 킷](conformance/README.md) — 새 어댑터 검증 시나리오와 네 언어 공용 골든 픽스처
 - [국내 증권사 오픈 API 조사 (2026-09)](claudedocs/korean-broker-openapi-survey-2026-09.md) — 다음 어댑터 우선순위 근거
