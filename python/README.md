@@ -7,7 +7,7 @@ Kotlin 구현(레퍼런스)과 같은 동작을 보장합니다: 같은 브로�
 ## 설치
 
 ```bash
-pip install ./python          # 레포 루트에서 (PyPI 배포 전)
+pip install hermetix            # PyPI (실시간 스트림까지: pip install 'hermetix[stream]')
 ```
 
 ## 빠른 시작
