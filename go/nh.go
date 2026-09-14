@@ -40,6 +40,8 @@ type NhClient struct {
 	appKey, appSecret string
 	accountNo         string
 	baseURL, authURL  string
+	wsURL             string
+	customWsURL       bool
 	marketCd          string
 	orderMarketCd     string
 	environment       TradingEnvironment
@@ -55,7 +57,7 @@ type NhClient struct {
 func NewNhClient(appKey, appSecret, accountNo string) *NhClient {
 	c := &NhClient{
 		appKey: appKey, appSecret: appSecret, accountNo: accountNo,
-		baseURL: NhPaperURL, authURL: NhAuthURL, marketCd: "KRX", orderMarketCd: "KRX",
+		baseURL: NhPaperURL, authURL: NhAuthURL, wsURL: NhWsPaperURL, marketCd: "KRX", orderMarketCd: "KRX",
 		environment: Paper,
 		http:        &http.Client{Timeout: 30 * time.Second},
 		limiter:     newRateLimiter(250*time.Millisecond, 3, func(a int) time.Duration { return time.Duration(a) * time.Second }),
@@ -74,6 +76,12 @@ func (c *NhClient) SetThrottle(d time.Duration) *NhClient {
 // SetEnvironment - 호스트(모의 moapi / 운영 api)가 결정된다. SetBaseURL 을 먼저 썼다면 그 값을 덮어쓴다.
 func (c *NhClient) SetEnvironment(env TradingEnvironment) *NhClient {
 	c.environment = env
+	if !c.customWsURL {
+		c.wsURL = NhWsPaperURL
+		if env == Live {
+			c.wsURL = NhWsLiveURL
+		}
+	}
 	c.baseURL = NhPaperURL
 	if env == Live {
 		c.baseURL = NhLiveURL
@@ -83,12 +91,27 @@ func (c *NhClient) SetEnvironment(env TradingEnvironment) *NhClient {
 
 func (c *NhClient) Environment() TradingEnvironment { return c.environment }
 
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시 — 모의 wss://moapi…:17070/websocket, 운영 wss://api…:7070/websocket).
+// 포털 가이드는 모의 시세 채널을 "미제공" 으로 표기한다(통보만 올 수 있음). 세션당 등록 10건(SDK 실측)/30건(공식), 앱키당 세션 2개.
+func (c *NhClient) SetWSURL(wsURL string) *NhClient {
+	c.wsURL = wsURL
+	c.customWsURL = true
+	return c
+}
+
+// OpenStream - 실시간 스트림(체결·호가·주문 통보). 문서 기반, 실측 전. 채널은 marketCd 에 따라 oc/ob·nc/nb·mc/mb.
+func (c *NhClient) OpenStream() MarketStream {
+	return newNhMarketStream(c.wsURL, c.marketCd, c.accountNo, c.getToken)
+}
+
 func (c *NhClient) Capabilities() BrokerCapabilities {
 	return BrokerCapabilities{
 		BrokerID: "nh", Market: "KRX", Currency: "KRW",
 		CandleIntervals: map[CandleInterval]bool{Day1: true},
 		ClientOrderID:   false, NativeBracket: false, FractionalShares: false, ServerOpenOrders: true,
 		Environments: map[TradingEnvironment]bool{Paper: true, Live: true},
+		// oc/nc/mc 체결·ob/nb/mb 호가·d2/d3 주문 통보 — 문서 기반, 실측 전
+		Streams: []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents},
 	}
 }
 

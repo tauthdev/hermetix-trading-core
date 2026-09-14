@@ -38,6 +38,8 @@ var (
 type DbClient struct {
 	appKey, appSecret string
 	baseURL           string
+	wsURL             string
+	customWsURL       bool
 	macAddress        string
 	marketDivCode     string
 	environment       TradingEnvironment
@@ -52,7 +54,7 @@ type DbClient struct {
 // NewDbClient - 운영/모의는 같은 호스트, 모의투자용 키로만 분기된다. SetEnvironment 는 엔진의 실전 게이트용 선언이다.
 func NewDbClient(appKey, appSecret string) *DbClient {
 	c := &DbClient{
-		appKey: appKey, appSecret: appSecret, baseURL: DbBaseURL, marketDivCode: "J", environment: Paper,
+		appKey: appKey, appSecret: appSecret, baseURL: DbBaseURL, wsURL: DbWsPaperURL, marketDivCode: "J", environment: Paper,
 		http:    &http.Client{Timeout: 30 * time.Second},
 		limiter: newRateLimiter(500*time.Millisecond, 4, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second }),
 	}
@@ -60,10 +62,30 @@ func NewDbClient(appKey, appSecret string) *DbClient {
 	return c
 }
 
-func (c *DbClient) SetBaseURL(u string) *DbClient                   { c.baseURL = u; return c }
-func (c *DbClient) SetMacAddress(m string) *DbClient                { c.macAddress = m; return c }
-func (c *DbClient) SetEnvironment(env TradingEnvironment) *DbClient { c.environment = env; return c }
-func (c *DbClient) Environment() TradingEnvironment                 { return c.environment }
+func (c *DbClient) SetBaseURL(u string) *DbClient    { c.baseURL = u; return c }
+func (c *DbClient) SetMacAddress(m string) *DbClient { c.macAddress = m; return c }
+func (c *DbClient) SetEnvironment(env TradingEnvironment) *DbClient {
+	c.environment = env
+	if !c.customWsURL {
+		c.wsURL = DbWsPaperURL
+		if env == Live {
+			c.wsURL = DbWsLiveURL
+		}
+	}
+	return c
+}
+
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시 — 모의 wss://openapi.dbsec.co.kr:17070/websocket, 운영 :7070/websocket).
+// 접속 후 10초 안에 첫 전송이 있어야 하고, 계좌당 세션 2개·종목 50개·접속 6회/분 (SDK 문서). 문서 기반, 실측 전.
+func (c *DbClient) SetWSURL(wsURL string) *DbClient {
+	c.wsURL = wsURL
+	c.customWsURL = true
+	return c
+}
+
+// OpenStream - 실시간 스트림(S00 체결·S01 호가·IS0/IS1 주문 통보). 문서 기반, 실측 전.
+func (c *DbClient) OpenStream() MarketStream        { return newDbMarketStream(c.wsURL, c.getToken) }
+func (c *DbClient) Environment() TradingEnvironment { return c.environment }
 func (c *DbClient) SetThrottle(d time.Duration) *DbClient {
 	c.limiter = newRateLimiter(d, 4, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second })
 	return c
@@ -75,6 +97,8 @@ func (c *DbClient) Capabilities() BrokerCapabilities {
 		CandleIntervals: map[CandleInterval]bool{Day1: true},
 		ClientOrderID:   false, NativeBracket: false, FractionalShares: false, ServerOpenOrders: true,
 		Environments: map[TradingEnvironment]bool{Paper: true, Live: true},
+		// S00 체결·S01 호가·IS0/IS1 주문 통보 — 문서 기반, 실측 전
+		Streams: []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents},
 	}
 }
 

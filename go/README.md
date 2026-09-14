@@ -79,7 +79,7 @@ hermetix.StrategySpec{
 }
 ```
 
-- 지원 브로커: `kis`(H0STCNT0), `kiwoom`(0B) — 2026-09 모의 웹소켓 장중 실측. 넥스트증권은 공개 스펙에 웹소켓이 없어 폴링만
+- 지원 브로커: `kis`(H0STCNT0), `kiwoom`(0B) — 2026-09 모의 웹소켓 장중 실측. `nh`(oc/nc/mc), `db`(S00), `ls`(S3_+K3_ 이중 등록), `toss`(trade:kr/us, Bearer 핸드셰이크·60초 `PING`) 는 공식 문서·SDK·AsyncAPI 기반 구현으로 **실측 전**(계좌 없음 — 해당 증권사 계좌 사용자 제보로 승격). 넥스트·KB 는 웹소켓 스펙 자체가 없어 폴링만
 - 스트림 틱이 전략의 모든 심볼을 덮으면 `ctx.Quote()` 는 REST 대신 마지막 체결 틱으로 채워집니다. 캔들·계좌·미체결은 여전히 REST 라 틱마다 `1 + 심볼 수 + 3` 호출이 나갑니다 — 모의 서버 레이트리밋(kis 2건/s)을 생각해 `MinTickInterval` 을 잡으세요
 - 스트림을 선언하지 않은 브로커에서 `TriggerOnTrade` 를 쓰면 경고 로그 후 폴링으로 동작합니다
 - 연결 계층만 쓸 때: `client.OpenStream()` → `Connect()` → `SubscribeTrades(symbols, func(tick hermetix.TradeTick) {...})`. 재접속·구독 복원은 스트림이 알아서 합니다
@@ -89,6 +89,7 @@ hermetix.StrategySpec{
 - `StrategySpec{OrderBook: true}` 로 선언하면 심볼의 10단계 호가창을 구독해 `ctx.OrderBook(symbol)` 로 받습니다 (`BestAsk()/BestBid()`, `TotalAskQuantity/TotalBidQuantity`). 호가 틱은 전략을 촉발하지 않습니다. `kis`(H0STASP0)·`kiwoom`(0D) — 2026-09 모의 실측
 - 브로커가 주문 통보 채널을 제공하면 엔진이 자동 구독해, 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고(`BracketMonitor.OnOrderEvent`) KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다(`OrderEventApplier`). KIS 는 `SetHTSID(...)` 가 필요하고(통보 프레임은 AES 암호문 — 구독 응답의 key/iv 로 복호화), 없으면 경고 후 폴링 판정으로 동작합니다. 통보 프레임 자체는 아직 문서 기반(실측 전)입니다
 - 연결 계층만 쓸 때: `SubscribeOrderBook(symbols, func(hermetix.OrderBookTick){...})`, `SubscribeOrderEvents(func(hermetix.OrderEvent){...})` — 미지원 브로커는 error 를 돌려줍니다
+- `nh`(ob/nb/mb 호가, d2/d3 통보)·`db`(S01 호가, IS0/IS1 통보)·`ls`(H1_/HA_ 호가, SC0~SC4 통보)·`toss`(orderbook:kr/us, personal:order — 체결량은 누적 스냅샷의 차이)도 같은 인터페이스로 제공되며 전부 문서 기반·실측 전입니다. NH 는 `marketCd`(KRX/NXT/UNT)로 채널이 갈리고 모의 서버는 시세를 "미제공" 으로 표기하며, DB 는 접속 10초 안에 첫 전송이 필요하고, LS 는 KOSPI·KOSDAQ TR 을 둘 다 등록해 등록 수가 2배입니다. 토스는 구독 집합 전체를 배열 하나로 선언하고(변경은 200ms 동안 합침) 거부된 target 은 다음 선언에서 뺍니다
 
 ## 공식 전략 예제 (examples/)
 

@@ -34,6 +34,8 @@ var (
 type LsClient struct {
 	appKey, appSecret string
 	baseURL           string
+	wsURL             string
+	customWsURL       bool
 	macAddress        string
 	exchGubun         string
 	environment       TradingEnvironment
@@ -49,7 +51,7 @@ type LsClient struct {
 // NewLsClient - 실전/모의는 같은 호스트, 모의투자용 appkey 로만 분기된다. SetEnvironment 는 엔진의 실전 게이트용 선언이다.
 func NewLsClient(appKey, appSecret string) *LsClient {
 	c := &LsClient{
-		appKey: appKey, appSecret: appSecret, baseURL: LsBaseURL, environment: Paper,
+		appKey: appKey, appSecret: appSecret, baseURL: LsBaseURL, wsURL: LsWsPaperURL, environment: Paper,
 		http:         &http.Client{Timeout: 30 * time.Second},
 		limiter:      newRateLimiter(500*time.Millisecond, 3, func(a int) time.Duration { return time.Duration(a) * time.Second }),
 		chartLimiter: newRateLimiter(1100*time.Millisecond, 0, func(int) time.Duration { return 0 }),
@@ -58,11 +60,31 @@ func NewLsClient(appKey, appSecret string) *LsClient {
 	return c
 }
 
-func (c *LsClient) SetBaseURL(u string) *LsClient                   { c.baseURL = u; return c }
-func (c *LsClient) SetMacAddress(m string) *LsClient                { c.macAddress = m; return c }
-func (c *LsClient) SetExchGubun(g string) *LsClient                 { c.exchGubun = g; return c }
-func (c *LsClient) SetEnvironment(env TradingEnvironment) *LsClient { c.environment = env; return c }
-func (c *LsClient) Environment() TradingEnvironment                 { return c.environment }
+func (c *LsClient) SetBaseURL(u string) *LsClient    { c.baseURL = u; return c }
+func (c *LsClient) SetMacAddress(m string) *LsClient { c.macAddress = m; return c }
+func (c *LsClient) SetExchGubun(g string) *LsClient  { c.exchGubun = g; return c }
+func (c *LsClient) SetEnvironment(env TradingEnvironment) *LsClient {
+	c.environment = env
+	if !c.customWsURL {
+		c.wsURL = LsWsPaperURL
+		if env == Live {
+			c.wsURL = LsWsLiveURL
+		}
+	}
+	return c
+}
+
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시 — 모의 wss://openapi.ls-sec.co.kr:29443/websocket, 실전 :9443/websocket).
+// 토큰은 익일 07:00 만료라 재접속 시 새 토큰이 필요하고, 세션·등록 한도는 미문서. 문서 기반, 실측 전.
+func (c *LsClient) SetWSURL(wsURL string) *LsClient {
+	c.wsURL = wsURL
+	c.customWsURL = true
+	return c
+}
+
+// OpenStream - 실시간 스트림(S3_/K3_ 체결·H1_/HA_ 호가·SC0~SC4 주문 통보). 문서 기반, 실측 전. KOSPI·KOSDAQ TR 을 둘 다 등록한다.
+func (c *LsClient) OpenStream() MarketStream        { return newLsMarketStream(c.wsURL, c.getToken) }
+func (c *LsClient) Environment() TradingEnvironment { return c.environment }
 func (c *LsClient) SetThrottle(d time.Duration) *LsClient {
 	c.limiter = newRateLimiter(d, 3, func(a int) time.Duration { return time.Duration(a) * time.Second })
 	return c
@@ -80,6 +102,8 @@ func (c *LsClient) Capabilities() BrokerCapabilities {
 		CandleIntervals: map[CandleInterval]bool{Day1: true},
 		ClientOrderID:   false, NativeBracket: false, FractionalShares: false, ServerOpenOrders: true,
 		Environments: map[TradingEnvironment]bool{Paper: true, Live: true},
+		// S3_/K3_ 체결·H1_/HA_ 호가·SC0~SC4 주문 통보 — 문서 기반, 실측 전
+		Streams: []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents},
 	}
 }
 

@@ -16,14 +16,15 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 )
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment,
+    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel, TradingEnvironment,
 )
+from .ls_stream import LsMarketStream
 from .nh import _d, _pct
 
 _AUTH_CODES = {"IGW00121", "IGW00123"}
@@ -36,19 +37,27 @@ def normalize_code(raw) -> str:
     return text[1:] if len(text) == 7 and text[0] == "A" else text
 
 
-class LsClient(BrokerClient):
+class LsClient(StreamingBrokerClient):
+
+    # 실시간 웹소켓 - 실전 9443 / 모의 29443 (/websocket). 토큰은 익일 07:00 만료, 세션·등록 한도 미문서 (실측 전)
+    PAPER_WS_URL = "wss://openapi.ls-sec.co.kr:29443/websocket"
+    LIVE_WS_URL = "wss://openapi.ls-sec.co.kr:9443/websocket"
 
     capabilities = BrokerCapabilities(
         broker_id="ls", market="KRX", currency="KRW",
         candle_intervals=frozenset({CandleInterval.DAY_1}),
         client_order_id=False, native_bracket=False, fractional_shares=False, server_open_orders=True,
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
+        # 문서 기반, 실측 전 - S3_/K3_ 체결·H1_/HA_ 호가·SC0~SC4 주문 통보
+        streams=frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS}),
     )
 
     def __init__(self, app_key: str, app_secret: str, base_url: str = "https://openapi.ls-sec.co.kr:8080",
                  mac_address: str = "", exch_gubun: str = "", throttle_seconds: float = 0.5,
-                 chart_throttle_seconds: float = 1.1, environment: TradingEnvironment = TradingEnvironment.PAPER):
+                 chart_throttle_seconds: float = 1.1, environment: TradingEnvironment = TradingEnvironment.PAPER,
+                 ws_url: str = ""):
         self.environment = environment
+        self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
         self._app_key = app_key
         self._app_secret = app_secret
         self._mac_address = mac_address
@@ -242,6 +251,11 @@ class LsClient(BrokerClient):
                 raise OrderNotFoundError(code, msg)
             raise BrokerApiError(status, code, msg)
         return parsed
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        return LsMarketStream(self._ws_url, self._get_token)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 600:

@@ -20,12 +20,13 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, OrderNotFoundError, RateLimitError
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment,
+    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel, TradingEnvironment,
 )
+from .nh_stream import NhMarketStream
 
 _SUCCESS_CODES = {"00000", "00166", "00221", "13578", "00165", "00218"}
 _FALLING_SIGNS = {"4", "5", "8", "9"}
@@ -66,11 +67,14 @@ def _parse_date(raw) -> datetime | None:
     return None
 
 
-class NhClient(BrokerClient):
+class NhClient(StreamingBrokerClient):
 
     PAPER_URL = "https://moapi.nhplug.com:8443"
     LIVE_URL = "https://api.nhplug.com:8443"
     AUTH_URL = "https://api.nhplug.com:8443"
+    # 실시간 웹소켓 - 경로 /websocket 필수. 모의(17070)는 포털 가이드에 시세 채널 "미제공" 표기라 통보만 올 수 있다 (실측 전)
+    PAPER_WS_URL = "wss://moapi.nhplug.com:17070/websocket"
+    LIVE_WS_URL = "wss://api.nhplug.com:7070/websocket"
 
     capabilities = BrokerCapabilities(
         broker_id="nh",
@@ -82,13 +86,19 @@ class NhClient(BrokerClient):
         fractional_shares=False,
         server_open_orders=True,
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
+        # 문서 기반, 실측 전 - 체결 oc/nc/mc·호가 ob/nb/mb (market_cd 별)·통보 d2/d3
+        streams=frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS}),
     )
 
     def __init__(self, app_key: str, app_secret: str, account_no: str = "",
                  base_url: str = "", auth_url: str = AUTH_URL, market_cd: str = "KRX", order_market_cd: str = "KRX",
-                 throttle_seconds: float = 0.25, environment: TradingEnvironment = TradingEnvironment.PAPER):
-        """account_no 를 비우면 /n2/acctinfo 에서 환경에 맞는 acct_type(모의 03 / 운영 01)의 첫 계좌를 고른다."""
+                 throttle_seconds: float = 0.25, environment: TradingEnvironment = TradingEnvironment.PAPER,
+                 ws_url: str = ""):
+        """account_no 를 비우면 /n2/acctinfo 에서 환경에 맞는 acct_type(모의 03 / 운영 01)의 첫 계좌를 고른다.
+        ws_url 을 비우면 실시간 웹소켓은 모의 moapi:17070 / 운영 api:7070 (/websocket). 세션당 등록 10건(SDK 실측)/30건(공식 문구),
+        앱키당 세션 2개. 운영 WS 서버가 중간 CA 를 보내지 않아 TLS 검증이 실패할 수 있다."""
         self.environment = environment
+        self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
         self._app_key = app_key
         self._app_secret = app_secret
         self._account_no = account_no
@@ -308,6 +318,11 @@ class NhClient(BrokerClient):
                 raise InsufficientFundsError(status, rsp_cd, msg)
             raise BrokerApiError(status, rsp_cd, msg)
         return parsed
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        return NhMarketStream(self._ws_url, self._get_token, market_cd=self._market_cd, account_no=self._account_no)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:

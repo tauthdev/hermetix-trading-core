@@ -1,6 +1,6 @@
 # Hermetix JavaScript/TypeScript
 
-증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 22+). 버전 0.9.0
+증권사 모의투자 통합 트레이딩 프레임워크 — Node.js 구현 (TypeScript, Node 22+). 버전 0.10.0
 
 의존성은 `decimal.js` 하나입니다 — JS 의 부동소수점(0.1+0.2≠0.3)으로 돈을 계산하지 않기 위한 필수 선택. **금액에 number 를 절대 섞지 마세요.** 실시간 웹소켓은 Node 22 내장 `WebSocket` 을 써서 추가 의존성이 없습니다.
 
@@ -91,6 +91,29 @@ new KisClient(appkey, appsecret, cano, "01", "", 0, "PAPER", "", htsId);
 - `spec.orderBook = true` → 심볼 호가창 스트림(kis `H0STASP0`·kiwoom `0D`, 2026-09 모의 실측)을 구독해 `ctx.orderBook(symbol)` 로 공급합니다. 호가는 틱을 촉발하지 않습니다
 - 주문 통보(kis `H0STCNI9/0`·kiwoom `00`)는 브로커가 제공하면 엔진이 자동 구독합니다 — 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고(`BracketMonitor.onOrderEvent`), KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다(`applyOrderEvent`). 통보 프레임은 문서 기반으로 실측 전입니다
 - KIS 통보 프레임은 AES-256-CBC 암호문이며 구독 응답의 key/iv 로 복호화합니다 (Node 내장 `crypto`, 추가 의존성 없음)
+
+
+## nh·db·ls·toss 실시간 (문서 기반, 실측 전)
+
+KIS·키움과 같은 `MarketStream` 인터페이스로 NH PLUG·DB증권·LS증권·토스증권의 체결가·호가·주문 통보를 구독합니다. 넷 다 공식 문서·SDK·AsyncAPI 로 만든 **미검증** 구현입니다 (해당 증권사 계좌가 있는 사용자의 실측 제보로 승격). 넥스트증권·KB증권은 웹소켓 스펙이 없어 폴링만 됩니다.
+
+| 브로커 | 접속 | 채널 | 비고 |
+|---|---|---|---|
+| `NhClient` | 모의 `wss://moapi.nhplug.com:17070/websocket` / 운영 `:7070` | 체결 `oc`/`nc`/`mc`·호가 `ob`/`nb`/`mb` (생성자 `marketCd` KRX/NXT/UNT 로 선택), 통보 `d2`+`d3` | 토큰은 매 메시지 헤더. 모의는 시세 "미제공" 표기라 통보만 올 수 있음. 세션당 등록 10건(SDK)/30건(공식), 앱키당 세션 2개 |
+| `DbClient` | 모의 `:17070/websocket` / 운영 `:7070` | 체결 `S00`·호가 `S01` (`tr_key` `"J "+코드`), 통보 `IS0`+`IS1` (`tr_type` 3, 해제 없음) | 접속 후 10초 안에 첫 전송. 계좌당 세션 2개·종목 50개. 본문 필드명은 대소문자 무시 조회 |
+| `LsClient` | 모의 `:29443/websocket` / 실전 `:9443` | 체결 `S3_`+`K3_`·호가 `H1_`+`HA_` (KOSPI·KOSDAQ 둘 다 등록), 통보 `SC0`~`SC4` | 토큰 익일 07:00 만료. `unsubscribeTrades/OrderBook/OrderEvents` 로 해제 |
+| `TossClient` | `wss://openapi-ws.tossinvest.com/ws/v1` (실전만) | 선언형 구독 — 배열 하나가 구독 집합 전체 (`trade:kr/us`, `orderbook:kr/us`, `personal:order`) | 핸드셰이크 `Authorization: Bearer` — Node 22 내장 WebSocket(undici) 의 `headers` 옵션으로 싣습니다. 60초마다 텍스트 `PING`, 계정당 연결 2개·구독 100개·선언 5회/초, 체결 틱에 누적거래량·등락 없음 |
+
+```ts
+const broker = new TossClient(clientId, clientSecret);   // 또는 NhClient / DbClient / LsClient
+const stream = broker.openStream();
+stream.subscribeTrades(["KRX:005930", "US:AAPL"], (t) => console.log(t.symbol, t.price.toString()));
+stream.subscribeOrderBook(["KRX:005930"], (b) => console.log(bestAsk(b), bestBid(b)));
+stream.subscribeOrderEvents((e) => console.log(e.type, e.orderId, e.quantity?.toString()));
+stream.connect();
+```
+
+각 스트림 클래스 상단 주석에 프로토콜 근거와 미확정 항목을 적었고, 파서(`parseNhTrade`, `parseDbTrade`, `parseLsTrade`, `parseTossTrade` 등)는 `conformance/fixtures/{nh,db,ls,toss}.json#stream` 의 문서 프레임으로 검증합니다.
 
 ## 공식 전략 예제 (examples/)
 

@@ -8,7 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { Decimal } from "decimal.js";
-import { BrokerClient, RateLimiter, httpJson, krxCalendar, krxTickRound } from "../broker.js";
+import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
 import {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "../errors.js";
@@ -17,6 +17,7 @@ import type {
   Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment,
 } from "../models.js";
 import { parseSymbol, symbolCodeFor } from "../models.js";
+import { TossMarketStream } from "./tossStream.js";
 
 const STATUS: Record<string, OrderStatus> = {
   PENDING: "SUBMITTED", PENDING_REPLACE: "SUBMITTED", PENDING_CANCEL: "PENDING_CANCEL", PARTIAL_FILLED: "PARTIALLY_FILLED",
@@ -26,12 +27,16 @@ const num = (v: unknown): Decimal | null => { if (v === null || v === undefined 
 const ts = (v: unknown): Date | null => { if (!v) return null; const d = new Date(String(v)); return Number.isNaN(d.getTime()) ? null : d; };
 const krw = (v: unknown): Decimal | null => (v && typeof v === "object" ? num((v as Record<string, unknown>).krw) : num(v));
 
-export class TossClient implements BrokerClient {
+export class TossClient implements StreamingBrokerClient {
+  /** 실시간 — AsyncAPI 1.2.2. 계정당 연결 2개, 구독 100개, 선언 5회/초, 180초 무송신 시 끊김(60초 PING), 토큰은 핸드셰이크에서만 검사 (실측 전) */
+  static readonly WS_URL = "wss://openapi-ws.tossinvest.com/ws/v1";
+
   readonly capabilities: BrokerCapabilities = {
     brokerId: "toss", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1m", "1d"]),
     clientOrderId: true, nativeBracket: false, fractionalShares: false, serverOpenOrders: true,
     environments: new Set<TradingEnvironment>(["LIVE"]), markets: new Set(["KRX", "US"]),
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]), // AsyncAPI 1.2.2 기반, 실측 전
   };
 
   private token: string | null = null;
@@ -47,9 +52,15 @@ export class TossClient implements BrokerClient {
     readonly baseUrl: string = "https://openapi.tossinvest.com",
     throttleMs = 200,
     readonly environment: TradingEnvironment = "LIVE",
+    readonly wsUrl: string = TossClient.WS_URL,
   ) {
     this.accountSeq = accountSeq;
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * 2 ** (attempt - 1));
+  }
+
+  /** 웹소켓은 REST 와 같은 토큰을 핸드셰이크 헤더에 싣고, 주문 이벤트 구독은 accountSeq 로 계좌를 고른다 */
+  openStream(): MarketStream {
+    return new TossMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken(), accountSeq: () => this.account() });
   }
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {

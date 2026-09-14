@@ -99,6 +99,7 @@ StrategyEngine(KisClient(appkey=..., appsecret=..., cano=...), [Scalper()]).run(
 - `order_book=True` 전략은 심볼의 10단계 호가창을 `ctx.order_book(symbol)` 로 받습니다 (`best_ask`/`best_bid`/`asks`/`bids`/총잔량). 호가는 틱을 촉발하지 않습니다
 - 브로커가 주문 통보 채널을 제공하면 엔진이 자동 구독해 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고, KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다. KIS 는 `KisClient(..., hts_id="HTS아이디")` 가 필요하고(통보 프레임은 AES 암호문이라 `cryptography` 사용), 비우면 경고 후 폴링 판정으로 동작합니다
 - 프레임 파서: `hermetix.brokers.kis_stream.parse_kis_frame / parse_kis_order_book / parse_kis_order_events`, `hermetix.brokers.kiwoom_stream.parse_kiwoom_real / parse_kiwoom_order_book / parse_kiwoom_order_events` — 골든 픽스처 `conformance/fixtures/*.json#stream` 으로 검증
+- **nh · db · ls · toss 스트림 (문서 기반, 실측 전)** — `NhClient`/`DbClient`/`LsClient`/`TossClient` 도 `open_stream()` 으로 체결가·호가·주문 통보를 받습니다. 공식 문서·SDK·AsyncAPI 로 만든 구현이라 계좌로 실측하기 전까지는 미검증이며, 파서는 `hermetix.brokers.{nh,db,ls,toss}_stream` 의 `parse_*` 함수와 픽스처 `stream.measured=false` 섹션으로 검증합니다. NH 는 `market_cd` 에 따라 채널(oc/nc/mc)이 갈리고 모의 서버는 시세 채널이 "미제공" 표기, DB 는 접속 후 10초 안에 첫 구독을 보내야 하며, LS 는 KOSPI/KOSDAQ TR 을 종목마다 둘 다 등록하고, 토스는 Bearer 핸드셰이크·선언형 구독·60초 `PING` 을 씁니다. **넥스트·KB 는 웹소켓이 없어**(공개 스펙에 없음) 폴링만 됩니다.
 
 ## 수익률
 
@@ -115,7 +116,7 @@ hermetix/
 ├── errors.py     타입화된 에러 (RateLimit/MarketClosed/... 엔진이 타입별 반응)
 ├── broker.py     BrokerClient ABC + MarketStream/StreamingBrokerClient + HTTP/쓰로틀/KRX 캘린더
 ├── stream.py     ReconnectingWebSocket (websockets 선택 의존성, 재접속·유휴 감시·직렬 전송)
-├── brokers/      next.py · kis.py · kiwoom.py · … (방언 정규화는 어댑터 책임), kis_stream.py · kiwoom_stream.py
+├── brokers/      next.py · kis.py · kiwoom.py · … (방언 정규화는 어댑터 책임), kis_stream.py · kiwoom_stream.py · nh_stream.py · db_stream.py · ls_stream.py · toss_stream.py
 ├── strategy.py   Strategy/StrategySpec(TickTrigger·order_book)/StrategyContext(order_book)/Signal(Buy·Sell·Cancel)
 └── engine.py     StrategyEngine(ON_TRADE 트리거·호가·주문통보)/브라켓(통보로 활성화)/비상정지/PnL
 ```

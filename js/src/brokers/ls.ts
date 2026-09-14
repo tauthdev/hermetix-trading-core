@@ -8,7 +8,7 @@
  * 미확인: 잔고 expcode 의 A 접두, sign 코드(4·5 하락 가정), 응답 숫자 타입, 장 마감 코드(메시지 판단), medosu 표기
  */
 import { Decimal } from "decimal.js";
-import { BrokerClient, RateLimiter, httpJson, krxCalendar, krxTickRound } from "../broker.js";
+import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
 import {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "../errors.js";
@@ -17,6 +17,7 @@ import type {
   Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote, TradingEnvironment,
 } from "../models.js";
 import { symbolCodeFor } from "../models.js";
+import { LsMarketStream } from "./lsStream.js";
 
 const AUTH_CODES = new Set(["IGW00121", "IGW00123"]);
 const FALLING_SIGNS = new Set(["4", "5"]);
@@ -46,14 +47,20 @@ const sideOf = (row: Record<string, unknown>): OrderSide => {
   return t.includes("매수") || t === "2" ? "BUY" : "SELL";
 };
 
-export class LsClient implements BrokerClient {
+export class LsClient implements StreamingBrokerClient {
+  /** 실시간 — 모의 29443 / 실전 9443. 토큰 익일 07:00 만료, 한도 미문서 (문서 기반, 실측 전) */
+  static readonly PAPER_WS_URL = "wss://openapi.ls-sec.co.kr:29443/websocket";
+  static readonly LIVE_WS_URL = "wss://openapi.ls-sec.co.kr:9443/websocket";
+
   readonly capabilities: BrokerCapabilities = {
     brokerId: "ls", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
     clientOrderId: false, nativeBracket: false, fractionalShares: false, serverOpenOrders: true,
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]), // 문서 기반, 실측 전
   };
 
+  readonly wsUrl: string;
   private token: string | null = null;
   private tokenExpiresAt = 0;
   private readonly limiter: RateLimiter;
@@ -68,9 +75,16 @@ export class LsClient implements BrokerClient {
     throttleMs = 500,
     chartThrottleMs = 1100,
     readonly environment: TradingEnvironment = "PAPER",
+    wsUrl = "",
   ) {
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * attempt);
     this.chartLimiter = new RateLimiter(chartThrottleMs, 0); // 차트 TR 초당 1건
+    this.wsUrl = wsUrl || (environment === "LIVE" ? LsClient.LIVE_WS_URL : LsClient.PAPER_WS_URL);
+  }
+
+  /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다. 종목마다 KOSPI·KOSDAQ TR 을 둘 다 등록한다 (문서 기반, 실측 전) */
+  openStream(): MarketStream {
+    return new LsMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {

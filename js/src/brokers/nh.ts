@@ -11,7 +11,7 @@
  * 미확인(실측 필요): mkt_orr_no 와 itg_orr_no 의 동일 여부, ost_cns_dit 코드 의미, 등락률·수익률 단위(% 추정), 응답 숫자 타입
  */
 import { Decimal } from "decimal.js";
-import { BrokerClient, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd } from "../broker.js";
+import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound, kstYyyymmdd } from "../broker.js";
 import {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, OrderNotFoundError, RateLimitError,
 } from "../errors.js";
@@ -20,6 +20,7 @@ import type {
   Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote, TradingEnvironment,
 } from "../models.js";
 import { symbolCodeFor } from "../models.js";
+import { NhMarketStream } from "./nhStream.js";
 
 const SUCCESS_CODES = new Set(["00000", "00166", "00221", "13578", "00165", "00218"]);
 const FALLING_SIGNS = new Set(["4", "5", "8", "9"]);
@@ -51,19 +52,24 @@ const parseDate = (raw: unknown): Date | null => {
 const sameNo = (a: unknown, b: unknown) => String(a ?? "").trim().replace(/^0+/, "") === String(b ?? "").trim().replace(/^0+/, "");
 const sideOf = (row: Record<string, unknown>): OrderSide => String(row.sby_dit_cd_nm ?? "").includes("매수") ? "BUY" : "SELL";
 
-export class NhClient implements BrokerClient {
+export class NhClient implements StreamingBrokerClient {
   static readonly PAPER_URL = "https://moapi.nhplug.com:8443";
   static readonly LIVE_URL = "https://api.nhplug.com:8443";
   static readonly AUTH_URL = "https://api.nhplug.com:8443";
+  /** 실시간 — 모의는 포털 가이드에 시세 채널 "미제공" 표기라 통보만 올 수 있다 (실측 전). 운영 7070 은 국내 시세·통보 공용, 세션당 등록 10건(SDK 실측)/30건(공식), 앱키당 세션 2개 */
+  static readonly PAPER_WS_URL = "wss://moapi.nhplug.com:17070/websocket";
+  static readonly LIVE_WS_URL = "wss://api.nhplug.com:7070/websocket";
 
   readonly capabilities: BrokerCapabilities = {
     brokerId: "nh", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
     clientOrderId: false, nativeBracket: false, fractionalShares: false, serverOpenOrders: true,
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]), // 문서 기반, 실측 전
   };
 
   readonly baseUrl: string;
+  readonly wsUrl: string;
   private token: string | null = null;
   private tokenExpiresAt = 0;
   private accountNo: string;
@@ -80,9 +86,11 @@ export class NhClient implements BrokerClient {
     private readonly orderMarketCd = "KRX",
     throttleMs = 250,
     readonly environment: TradingEnvironment = "PAPER",
+    wsUrl = "",
   ) {
     this.accountNo = accountNo;
     this.baseUrl = baseUrl || (environment === "LIVE" ? NhClient.LIVE_URL : NhClient.PAPER_URL);
+    this.wsUrl = wsUrl || (environment === "LIVE" ? NhClient.LIVE_WS_URL : NhClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * attempt);
   }
 
@@ -204,6 +212,13 @@ export class NhClient implements BrokerClient {
         fillId: null, orderId: String(r.itg_orr_no ?? "").trim(), symbol: nhNormalizeCode(r.iem_cd), side: sideOf(r),
         quantity: num(r.tot_cns_qty), price: num(r.cns_avg_uit_pr),
       }));
+  }
+
+  // ---------------------------------------------------------------- stream
+
+  /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다. 채널은 marketCd(KRX oc/ob, NXT nc/nb, UNT mc/mb) 로 고른다 */
+  openStream(): MarketStream {
+    return new NhMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken(), marketCd: this.marketCd, accountNo: this.accountNo });
   }
 
   // -------------------------------------------------------------- internal

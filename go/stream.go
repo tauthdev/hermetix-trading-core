@@ -4,12 +4,15 @@ package hermetix
 //
 //   - Connect 는 즉시 반환하고 전용 고루틴에서 접속한다. 실패하면 1s → 2s → 4s … maxBackoff 로 재시도
 //   - 소켓이 닫히거나 오류가 나면 같은 백오프로 재접속한다. Close 뒤에는 재접속하지 않는다
-//   - idleTimeout 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다
+//   - idleTimeout 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다 (0 이면 끈다 — NH 처럼 조용한 게 정상인 브로커)
+//   - heartbeat > 0 이고 프로토콜이 heartbeatProtocol 을 구현하면 그 주기로 OnHeartbeat 를 부른다 (토스처럼 클라이언트가 먼저 PING 을 보내야 하는 브로커)
+//   - 프로토콜이 headerProtocol 을 구현하면 핸드셰이크에 그 HTTP 헤더를 싣는다 (토스: Authorization Bearer)
 //   - Send 는 직렬화된다. 리스너·훅의 panic 은 로그만 남긴다
 
 import (
 	"context"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -28,11 +31,22 @@ type streamProtocol interface {
 	OnDisconnected()
 }
 
+// heartbeatProtocol - 선택 훅: heartbeat 주기마다, 소켓이 열려 있을 때만 호출된다 (스트림 고루틴과 별도 고루틴).
+type heartbeatProtocol interface {
+	OnHeartbeat()
+}
+
+// headerProtocol - 선택 훅: 접속 핸드셰이크에 실을 HTTP 헤더 — 매 (재)접속마다 호출된다.
+type headerProtocol interface {
+	Headers() map[string]string
+}
+
 type reconnectingWebSocket struct {
 	name        string
 	protocol    streamProtocol
 	maxBackoff  time.Duration
 	idleTimeout time.Duration
+	heartbeat   time.Duration
 
 	mu         sync.Mutex
 	conn       *websocket.Conn
@@ -157,7 +171,15 @@ func (w *reconnectingWebSocket) session(ctx context.Context) error {
 	w.mu.Unlock()
 	log.Printf("INFO hermetix %s stream: connecting %s (attempt %d)", w.name, uri, attempt)
 	dialCtx, cancelDial := context.WithTimeout(ctx, 10*time.Second)
-	conn, _, err := websocket.Dial(dialCtx, uri, nil)
+	var opts *websocket.DialOptions
+	if hp, ok := w.protocol.(headerProtocol); ok {
+		headers := http.Header{}
+		for k, v := range hp.Headers() {
+			headers.Set(k, v)
+		}
+		opts = &websocket.DialOptions{HTTPHeader: headers}
+	}
+	conn, _, err := websocket.Dial(dialCtx, uri, opts)
 	cancelDial()
 	if err != nil {
 		return err
@@ -174,7 +196,12 @@ func (w *reconnectingWebSocket) session(ctx context.Context) error {
 
 	sessionCtx, cancelSession := context.WithCancel(ctx)
 	defer cancelSession()
-	go w.watchIdle(sessionCtx, conn)
+	if w.idleTimeout > 0 {
+		go w.watchIdle(sessionCtx, conn)
+	}
+	if hb, ok := w.protocol.(heartbeatProtocol); ok && w.heartbeat > 0 {
+		go w.runHeartbeat(sessionCtx, hb)
+	}
 
 	for {
 		kind, data, err := conn.Read(sessionCtx)
@@ -210,6 +237,21 @@ func (w *reconnectingWebSocket) watchIdle(ctx context.Context, conn *websocket.C
 				log.Printf("WARN hermetix %s stream: %s 동안 프레임 없음 - 재접속", w.name, w.idleTimeout)
 				_ = conn.Close(websocket.StatusGoingAway, "idle timeout")
 				return
+			}
+		}
+	}
+}
+
+func (w *reconnectingWebSocket) runHeartbeat(ctx context.Context, hb heartbeatProtocol) {
+	ticker := time.NewTicker(w.heartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if w.IsSocketOpen() {
+				w.safe("onHeartbeat", hb.OnHeartbeat)
 			}
 		}
 	}

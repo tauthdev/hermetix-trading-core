@@ -11,7 +11,7 @@
  * 미확인(실측 필요): 응답 숫자의 JSON 타입, IsuNo 의 A 접두 여부, 일봉 정렬(최신일 우선 추정), PrdyVrss 부호 여부
  */
 import { Decimal } from "decimal.js";
-import { BrokerClient, RateLimiter, httpJson, krxCalendar, krxTickRound } from "../broker.js";
+import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
 import {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "../errors.js";
@@ -20,6 +20,7 @@ import type {
   Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote, TradingEnvironment,
 } from "../models.js";
 import { symbolCodeFor } from "../models.js";
+import { DbMarketStream } from "./dbStream.js";
 
 const AUTH_CODES = new Set(["IGW00121", "IGW00122", "IGW00123", "IGW40342"]);
 const MARKET_CLOSED_CODES = new Set(["2611", "3589", "3590", "3563"]);
@@ -51,14 +52,20 @@ const sideOf = (row: Record<string, unknown>): OrderSide => String(row.BnsTpCode
 const remainingOf = (row: Record<string, unknown>): Decimal =>
   num(row.MrcAbleQty) ?? (num(row.OrdQty) ?? new Decimal(0)).minus(num(row.AllExecQty) ?? 0).minus(num(row.MrcQty) ?? 0);
 
-export class DbClient implements BrokerClient {
+export class DbClient implements StreamingBrokerClient {
+  /** 실시간 — 운영 7070 / 모의 17070. 접속 후 10초 내 첫 전송, 계좌당 세션 2개·종목 50개, 연결 6회/분 (문서 기반, 실측 전) */
+  static readonly PAPER_WS_URL = "wss://openapi.dbsec.co.kr:17070/websocket";
+  static readonly LIVE_WS_URL = "wss://openapi.dbsec.co.kr:7070/websocket";
+
   readonly capabilities: BrokerCapabilities = {
     brokerId: "db", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
     clientOrderId: false, nativeBracket: false, fractionalShares: false, serverOpenOrders: true,
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]), // 문서 기반, 실측 전
   };
 
+  readonly wsUrl: string;
   private token: string | null = null;
   private tokenExpiresAt = 0;
   private readonly limiter: RateLimiter;
@@ -72,8 +79,15 @@ export class DbClient implements BrokerClient {
     private readonly marketDivCode = "J",
     throttleMs = 500,
     readonly environment: TradingEnvironment = "PAPER",
+    wsUrl = "",
   ) {
     this.limiter = new RateLimiter(throttleMs, 4, (attempt) => 1000 * 2 ** (attempt - 1));
+    this.wsUrl = wsUrl || (environment === "LIVE" ? DbClient.LIVE_WS_URL : DbClient.PAPER_WS_URL);
+  }
+
+  /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다 (문서 기반, 실측 전) */
+  openStream(): MarketStream {
+    return new DbMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   // ---------------------------------------------------------------- market

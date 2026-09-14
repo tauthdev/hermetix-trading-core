@@ -19,14 +19,15 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from ..broker import KST, BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import KST, MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 )
 from ..models import (
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment,
+    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel, TradingEnvironment,
 )
+from .db_stream import DbMarketStream
 
 _AUTH_CODES = {"IGW00121", "IGW00122", "IGW00123", "IGW40342"}
 _MARKET_CLOSED_CODES = {"2611", "3589", "3590", "3563"}
@@ -58,7 +59,11 @@ def normalize_code(raw) -> str:
     return text[1:] if len(text) == 7 and text[0] == "A" else text
 
 
-class DbClient(BrokerClient):
+class DbClient(StreamingBrokerClient):
+
+    # 실시간 웹소켓 - 운영 7070 / 모의 17070 (호스트 공유, 포트로 분리). 접속 후 10초 내 첫 전송, 계좌당 세션 2개·종목 50개, 연결 6회/분 (실측 전)
+    PAPER_WS_URL = "wss://openapi.dbsec.co.kr:17070/websocket"
+    LIVE_WS_URL = "wss://openapi.dbsec.co.kr:7070/websocket"
 
     capabilities = BrokerCapabilities(
         broker_id="db",
@@ -70,13 +75,17 @@ class DbClient(BrokerClient):
         fractional_shares=False,
         server_open_orders=True,
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
+        # 문서 기반, 실측 전 - S00 체결·S01 호가·IS0/IS1 주문 통보
+        streams=frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS}),
     )
 
     def __init__(self, app_key: str, app_secret: str, base_url: str = "https://openapi.dbsec.co.kr:8443",
                  mac_address: str = "", market_div_code: str = "J", throttle_seconds: float = 0.5,
-                 environment: TradingEnvironment = TradingEnvironment.PAPER):
-        """운영/모의는 같은 호스트 — 모의투자용 키로만 분기된다. environment 는 엔진의 실전 게이트용 선언이다."""
+                 environment: TradingEnvironment = TradingEnvironment.PAPER, ws_url: str = ""):
+        """운영/모의는 같은 호스트 — 모의투자용 키로만 분기된다. environment 는 엔진의 실전 게이트용 선언이다.
+        ws_url 을 비우면 실시간 웹소켓은 모의 :17070 / 운영 :7070 (/websocket)."""
         self.environment = environment
+        self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
         self._app_key = app_key
         self._app_secret = app_secret
         self._mac_address = mac_address
@@ -274,6 +283,11 @@ class DbClient(BrokerClient):
                 raise OrderNotFoundError(code, msg)
             raise BrokerApiError(status, code, msg)
         return parsed
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        return DbMarketStream(self._ws_url, self._get_token)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 600:

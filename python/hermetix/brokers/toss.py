@@ -17,14 +17,15 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..broker import BrokerClient, RateLimiter, _Http, krx_calendar, krx_tick_round
+from ..broker import MarketStream, RateLimiter, StreamingBrokerClient, _Http, krx_calendar, krx_tick_round
 from ..errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError, MarketClosedError, OrderNotFoundError, RateLimitError,
 )
 from ..models import (
-    Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
+    Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest, StreamChannel,
     Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, TradingEnvironment, parse_symbol,
 )
+from .toss_stream import TossMarketStream
 
 _STATUS = {
     "PENDING": OrderStatus.SUBMITTED, "PENDING_REPLACE": OrderStatus.SUBMITTED, "PENDING_CANCEL": OrderStatus.PENDING_CANCEL,
@@ -52,7 +53,11 @@ def _ts(value) -> datetime | None:
         return None
 
 
-class TossClient(BrokerClient):
+class TossClient(StreamingBrokerClient):
+
+    # 실시간 웹소켓 (AsyncAPI 1.2.2, 실측 전) - 계정당 연결 2개(3번째가 오면 가장 오래된 것 종료), 구독 100개, 선언 5회/초,
+    # 180초 무송신 시 서버가 끊음 -> 60초 PING, 토큰은 핸드셰이크에서만 검사, 재접속 시 REST 토큰 재사용(재발급하면 이전 토큰 무효)
+    WS_URL = "wss://openapi-ws.tossinvest.com/ws/v1"
 
     capabilities = BrokerCapabilities(
         broker_id="toss", market="KRX", currency="KRW",
@@ -60,12 +65,15 @@ class TossClient(BrokerClient):
         client_order_id=True, native_bracket=False, fractional_shares=False, server_open_orders=True,
         environments=frozenset({TradingEnvironment.LIVE}),  # 샌드박스 없음
         markets=frozenset({"KRX", "US"}),
+        # AsyncAPI 1.2.2 기반, 실측 전 - trade/orderbook:{kr,us}·personal:order 선언형 구독
+        streams=frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS}),
     )
 
     def __init__(self, client_id: str, client_secret: str, account_seq: str = "", base_url: str = "https://openapi.tossinvest.com",
-                 throttle_seconds: float = 0.2, environment: TradingEnvironment = TradingEnvironment.LIVE):
+                 throttle_seconds: float = 0.2, environment: TradingEnvironment = TradingEnvironment.LIVE, ws_url: str = WS_URL):
         """account_seq 를 비우면 GET /api/v1/accounts 의 첫 BROKERAGE 계좌를 쓴다."""
         self.environment = environment
+        self._ws_url = ws_url
         self._client_id = client_id
         self._client_secret = client_secret
         self._account_seq = account_seq
@@ -241,6 +249,11 @@ class TossClient(BrokerClient):
                 raise InvalidOrderError(status, code, msg)
             raise BrokerApiError(status, code, msg)
         return parsed.get("result")
+
+    # ------------------------------------------------------------------ stream
+
+    def open_stream(self) -> MarketStream:
+        return TossMarketStream(self._ws_url, self._get_token, self._account)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 60:

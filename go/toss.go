@@ -36,6 +36,7 @@ type TossClient struct {
 	clientID, clientSecret string
 	accountSeq             string
 	baseURL                string
+	wsURL                  string
 	environment            TradingEnvironment
 	http                   *http.Client
 	limiter                *rateLimiter
@@ -48,7 +49,7 @@ type TossClient struct {
 // NewTossClient - accountSeq 를 비우면 GET /api/v1/accounts 의 첫 BROKERAGE 계좌를 쓴다. 환경은 Live 고정(샌드박스 없음).
 func NewTossClient(clientID, clientSecret, accountSeq string) *TossClient {
 	c := &TossClient{
-		clientID: clientID, clientSecret: clientSecret, accountSeq: accountSeq, baseURL: TossBaseURL, environment: Live,
+		clientID: clientID, clientSecret: clientSecret, accountSeq: accountSeq, baseURL: TossBaseURL, wsURL: TossWsURL, environment: Live,
 		http:    &http.Client{Timeout: 30 * time.Second},
 		limiter: newRateLimiter(200*time.Millisecond, 3, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second }),
 	}
@@ -62,6 +63,18 @@ func (c *TossClient) SetEnvironment(env TradingEnvironment) *TossClient {
 	return c
 }
 func (c *TossClient) Environment() TradingEnvironment { return c.environment }
+
+// SetWSURL - 실시간 웹소켓 주소를 직접 지정 (기본 wss://openapi-ws.tossinvest.com/ws/v1 — 모의 환경 없음).
+// 계정당 연결 2개(3번째가 오면 가장 오래된 것 종료), 구독 100개, 선언 5회/초, 180초 무송신 시 서버가 끊어 60초 PING. AsyncAPI 1.2.2 기반, 실측 전.
+func (c *TossClient) SetWSURL(wsURL string) *TossClient {
+	c.wsURL = wsURL
+	return c
+}
+
+// OpenStream - 실시간 스트림(trade/orderbook:{kr,us}·personal:order 선언형 구독). REST 토큰을 그대로 쓰고 재발급하지 않는다.
+func (c *TossClient) OpenStream() MarketStream {
+	return newTossMarketStream(c.wsURL, c.getToken, c.account)
+}
 func (c *TossClient) SetThrottle(d time.Duration) *TossClient {
 	c.limiter = newRateLimiter(d, 3, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second })
 	return c
@@ -73,7 +86,9 @@ func (c *TossClient) Capabilities() BrokerCapabilities {
 		CandleIntervals: map[CandleInterval]bool{Min1: true, Day1: true},
 		ClientOrderID:   true, NativeBracket: false, FractionalShares: false, ServerOpenOrders: true,
 		Environments: map[TradingEnvironment]bool{Live: true},
-		Markets:      map[string]bool{"KRX": true, "US": true},
+		// trade/orderbook:{kr,us}·personal:order — AsyncAPI 1.2.2 기반, 실측 전
+		Streams: []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents},
+		Markets: map[string]bool{"KRX": true, "US": true},
 	}
 }
 

@@ -48,6 +48,7 @@ type orderEventFixture struct {
 
 type streamFixture struct {
 	Channel     string             `json:"channel"`
+	Measured    bool               `json:"measured"`
 	Frames      []string           `json:"frames"`
 	OrderBook   *bookFixture       `json:"orderBook"`
 	OrderEvents *orderEventFixture `json:"orderEvents"`

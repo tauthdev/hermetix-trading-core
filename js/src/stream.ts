@@ -6,7 +6,9 @@
  * 동작 (Kotlin ReconnectingWebSocket 과 동일):
  * - connect() 는 즉시 반환하고 접속한다. 실패하면 1s → 2s → 4s … maxBackoffMs 로 재시도
  * - 소켓이 닫히거나 오류가 나면 같은 백오프로 재접속. close() 뒤에는 재접속하지 않는다
- * - idleTimeoutMs 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다
+ * - idleTimeoutMs 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다 (0 이면 끈다 — NH 처럼 조용한 게 정상인 브로커)
+ * - heartbeatMs > 0 이면 그 주기로 onHeartbeat() 를 부른다 (토스처럼 클라이언트가 먼저 PING 을 보내야 하는 브로커)
+ * - headers() 가 돌려주는 헤더를 업그레이드 요청에 싣는다 (Node 22 내장 WebSocket 의 undici `headers` 옵션 — 토스 Authorization: Bearer)
  * - 콜백은 이벤트 루프에서 실행된다. onMessage 의 예외는 로그만 남긴다
  */
 const log = {
@@ -22,6 +24,7 @@ export abstract class ReconnectingWebSocket {
   private lastFrameAt = Date.now();
   private reconnectTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
   /** 원시 텍스트 프레임 관찰용 훅 (프로토콜 실측·픽스처 채집). 파싱 전에 호출되며 예외는 무시된다 */
   rawFrameHook: ((text: string) => void) | null = null;
@@ -33,6 +36,7 @@ export abstract class ReconnectingWebSocket {
     private readonly name: string,
     private readonly maxBackoffMs = 30_000,
     private readonly idleTimeoutMs = 90_000,
+    private readonly heartbeatMs = 0,
   ) {}
 
   /** 매 (재)접속마다 호출된다 — 토큰·승인키 갱신은 여기서 */
@@ -43,12 +47,25 @@ export abstract class ReconnectingWebSocket {
   protected abstract onMessage(text: string): void;
   /** 연결이 끊긴 직후 (재접속 예약 전). 하위 클래스가 로그인 상태 등을 초기화한다 */
   protected onDisconnected(): void {}
+  /** heartbeatMs 주기로, 소켓이 열려 있을 때만 호출된다 */
+  protected onHeartbeat(): void {}
+  /** 접속 핸드셰이크에 실을 HTTP 헤더 — 매 (재)접속마다 호출된다 (토스: Authorization Bearer) */
+  protected headers(): Record<string, string> | Promise<Record<string, string>> { return {}; }
 
   connect(): void {
     if (this.closed) throw new Error(`${this.name} stream: 닫힌 스트림은 다시 열 수 없다`);
-    this.doConnect();
-    this.idleTimer = setInterval(() => this.checkIdle(), Math.max(1, Math.floor(this.idleTimeoutMs / 3)));
-    this.idleTimer.unref?.();
+    void this.doConnect();
+    if (this.idleTimeoutMs > 0) {
+      this.idleTimer = setInterval(() => this.checkIdle(), Math.max(1, Math.floor(this.idleTimeoutMs / 3)));
+      this.idleTimer.unref?.();
+    }
+    if (this.heartbeatMs > 0) {
+      this.heartbeatTimer = setInterval(() => {
+        if (this.closed || !this.socket) return;
+        try { this.onHeartbeat(); } catch (e) { log.warn(`${this.name} stream: heartbeat 실패 - ${e}`); }
+      }, this.heartbeatMs);
+      this.heartbeatTimer.unref?.();
+    }
   }
 
   /** 텍스트 프레임 전송. 연결이 없으면 false */
@@ -68,6 +85,7 @@ export abstract class ReconnectingWebSocket {
     this.closed = true;
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.idleTimer) { clearInterval(this.idleTimer); this.idleTimer = null; }
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     const ws = this.socket;
     this.socket = null;
     this.isSocketOpen = false;
@@ -76,13 +94,18 @@ export abstract class ReconnectingWebSocket {
 
   // ------------------------------------------------------------------ internals
 
-  private doConnect(): void {
+  private async doConnect(): Promise<void> {
     if (this.closed) return;
     const target = this.uri();
     log.info(`${this.name} stream: connecting ${target} (attempt ${this.attempt + 1})`);
     let ws: WebSocket;
     try {
-      ws = new WebSocket(target);
+      const headers = await this.headers();
+      if (this.closed) return;
+      // undici(Node 22 내장) WebSocket 은 init.headers 로 업그레이드 헤더를 실을 수 있다 — DOM 타입에는 없어 캐스팅
+      ws = Object.keys(headers).length > 0
+        ? new (WebSocket as unknown as new (url: string, init: { headers: Record<string, string> }) => WebSocket)(target, { headers })
+        : new WebSocket(target);
     } catch (e) {
       log.warn(`${this.name} stream: 접속 실패 - ${e}`);
       this.scheduleReconnect();
@@ -135,7 +158,7 @@ export abstract class ReconnectingWebSocket {
     const n = this.attempt++;
     const delay = Math.min(1000 * 2 ** Math.min(n, 10), this.maxBackoffMs);
     log.info(`${this.name} stream: reconnect in ${delay}ms`);
-    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.doConnect(); }, delay);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; void this.doConnect(); }, delay);
     this.reconnectTimer.unref?.();
   }
 

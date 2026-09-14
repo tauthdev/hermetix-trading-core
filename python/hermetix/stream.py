@@ -9,7 +9,9 @@
 - connect() 는 즉시 반환하고 전용 데몬 스레드의 asyncio 루프에서 접속한다. 실패하면 1s -> 2s -> 4s ... max_backoff 로 재시도
 - 소켓이 닫히거나 오류가 나면 같은 백오프로 재접속한다. close() 뒤에는 재접속하지 않는다
 - idle_timeout 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다
-  (브로커들이 주기적으로 PING 류 프레임을 보내므로 정상 연결에서는 발생하지 않는다)
+  (KIS·키움처럼 서버가 주기적으로 PING 류 프레임을 보내는 브로커용. 0 이면 끈다 - NH 처럼 조용한 게 정상인 브로커)
+- heartbeat_seconds > 0 이면 그 주기로 on_heartbeat() 를 부른다 (토스처럼 클라이언트가 먼저 PING 을 보내야 하는 브로커)
+- headers() 가 돌려주는 헤더를 핸드셰이크에 싣는다 (토스: Authorization Bearer). 매 (재)접속마다 호출된다
 - send() 는 스트림 스레드로 넘겨 직렬 실행된다
 """
 from __future__ import annotations
@@ -26,10 +28,11 @@ logger = logging.getLogger("hermetix")
 class ReconnectingWebSocket(ABC):
 
     def __init__(self, name: str, max_backoff_seconds: float = 30.0, idle_timeout_seconds: float = 90.0,
-                 connect_timeout_seconds: float = 10.0):
+                 connect_timeout_seconds: float = 10.0, heartbeat_seconds: float = 0.0):
         self._name = name
         self._max_backoff = max_backoff_seconds
         self._idle_timeout = idle_timeout_seconds
+        self._heartbeat = heartbeat_seconds
         self._connect_timeout = connect_timeout_seconds
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -48,6 +51,7 @@ class ReconnectingWebSocket(ABC):
         """매 (재)접속마다 호출된다 - 토큰·승인키 갱신은 여기서"""
 
     def headers(self) -> dict[str, str]:
+        """접속 핸드셰이크에 실을 HTTP 헤더 - 매 (재)접속마다 호출된다 (토스: Authorization Bearer)"""
         return {}
 
     @abstractmethod
@@ -60,6 +64,9 @@ class ReconnectingWebSocket(ABC):
 
     def on_disconnected(self) -> None:
         """연결이 끊긴 직후 (재접속 예약 전). 하위 클래스가 로그인 상태 등을 초기화한다"""
+
+    def on_heartbeat(self) -> None:
+        """heartbeat_seconds 주기로, 소켓이 열려 있을 때만 호출된다 (스트림 스레드)"""
 
     # ------------------------------------------------------------------ 공개 API
 
@@ -144,7 +151,12 @@ class ReconnectingWebSocket(ABC):
                         self.on_open()
                     except Exception:  # noqa: BLE001
                         logger.exception("%s stream: on_open 실패", self._name)
-                    reason = await self._receive_until_closed(ws)
+                    heartbeat = asyncio.ensure_future(self._heartbeat_loop()) if self._heartbeat > 0 else None
+                    try:
+                        reason = await self._receive_until_closed(ws)
+                    finally:
+                        if heartbeat is not None:
+                            heartbeat.cancel()
                     self._handle_disconnect(reason)
             except Exception as e:  # noqa: BLE001
                 if self._socket_open:
@@ -158,11 +170,22 @@ class ReconnectingWebSocket(ABC):
             logger.info("%s stream: reconnect in %.0fms", self._name, delay * 1000)
             await asyncio.sleep(delay)
 
+    async def _heartbeat_loop(self) -> None:
+        """heartbeat_seconds 마다 on_heartbeat() - 소켓이 열려 있는 동안만"""
+        while not self._closed and self._socket is not None:
+            await asyncio.sleep(self._heartbeat)
+            if self._closed or self._socket is None:
+                return
+            try:
+                self.on_heartbeat()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("%s stream: heartbeat 실패 - %s", self._name, e)
+
     async def _receive_until_closed(self, ws) -> str:
-        """프레임을 받아 on_message 로 넘긴다. 유휴 시간 초과·종료·오류 시 사유를 돌려준다"""
+        """프레임을 받아 on_message 로 넘긴다. 유휴 시간 초과·종료·오류 시 사유를 돌려준다 (idle_timeout 0 이면 무기한 대기)"""
         while not self._closed:
             try:
-                message = await asyncio.wait_for(ws.recv(), timeout=self._idle_timeout)
+                message = await asyncio.wait_for(ws.recv(), timeout=self._idle_timeout if self._idle_timeout > 0 else None)
             except asyncio.TimeoutError:
                 logger.warning("%s stream: %.0fms 동안 프레임 없음 - 재접속", self._name, self._idle_timeout * 1000)
                 try:
