@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * KIS 실시간 체결가 스트림 (TR `H0STCNT0`). 문서 기반 구현, 모의 실측 전.
+ * KIS 실시간 체결가 스트림 (TR `H0STCNT0`). 2026-09-14 모의투자 서버(ops…:31000) 장중 실측 통과.
  *
  * 프로토콜 (KIS 개발자센터 웹소켓 가이드):
  * - 접속: 모의 `ws://ops.koreainvestment.com:31000`, 실전 `:21000`. TLS 없음
@@ -27,9 +27,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   레코드가 여러 건이면 본문에 이어 붙는다 (필드 폭 = 전체 필드 수 / 건수)
  * - 제어 프레임(JSON): 구독 결과(`body.rt_cd`/`msg_cd`), `PINGPONG`(그대로 되돌려 보내야 연결 유지)
  *
- * 필드 순서(H0STCNT0, 0부터): 0 단축코드, 1 체결시각 HHMMSS, 2 현재가, 3 전일대비부호, 4 전일대비, 5 전일대비율(%),
- * 6 가중평균가, 7 시가, 8 고가, 9 저가, 10 매도호가1, 11 매수호가1, 12 체결거래량, 13 누적거래량, …
- * 실측 전이므로 인덱스가 어긋나면 [parseFrame] 만 고치면 된다 — 픽스처 `conformance/fixtures/kis.json#stream` 참고.
+ * 필드 순서(H0STCNT0, 0부터, 실측 레코드 폭 47): 0 단축코드, 1 체결시각 HHMMSS, 2 현재가, 3 전일대비부호, 4 전일대비(부호 포함),
+ * 5 전일대비율(%), 6 가중평균가, 7 시가, 8 고가, 9 저가, 10 매도호가1, 11 매수호가1, 12 체결거래량, 13 누적거래량, …
+ * 실측: 한 프레임에 레코드가 최대 3건 이어 붙어 온다(건수 세그먼트 003). 구독 성공 응답의 `output.iv/key` 는 암호화 TR 용이라 쓰지 않는다.
+ * 실측 프레임은 `conformance/fixtures/kis.json#stream`.
  */
 class KisMarketStream(
     private val properties: KisApiProperties,

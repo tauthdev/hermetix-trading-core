@@ -42,6 +42,15 @@ class KiwoomStreamSmokeTest {
         val ticks = LinkedBlockingQueue<TradeTick>()
         client.openStream().use { stream ->
             stream.subscribeTrades(listOf("005930", "000660")) { ticks.put(it) }
+            // 픽스처 채집용 — 처음 8개 원시 프레임(제어 프레임 포함)을 출력하고, HERMETIX_RAW_DUMP 가 있으면 그 파일에 전체를 적는다
+            val dumped = java.util.concurrent.atomic.AtomicInteger()
+            val dumpFile = System.getenv("HERMETIX_RAW_DUMP")?.let { java.io.File(it) }
+            (stream as com.tripleauth.hermetix.broker.ReconnectingWebSocket).rawFrameHook = { raw ->
+                if (dumped.incrementAndGet() <= 8) {
+                    println("RAW[${dumped.get()}]: ${raw.take(300)}")
+                    dumpFile?.appendText(raw + "\n")
+                }
+            }
             stream.connect()
 
             val deadline = System.currentTimeMillis() + 20_000

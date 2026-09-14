@@ -29,7 +29,7 @@ override val spec = StrategySpec(
     candleLimit = 50,                  // 공급받을 캔들 개수
     pollInterval = Duration.ofSeconds(60),
     regularHoursOnly = true,           // false 면 폐장 중에도 호출됨 (주문은 체결 안 됨에 유의)
-    trigger = TickTrigger.POLL,        // ON_TRADE 면 체결가 스트림 틱마다 호출 (kis/kiwoom, 0.8.0) — 폴링은 안전망으로 유지
+    trigger = TickTrigger.POLL,        // ON_TRADE 면 체결가 스트림 틱마다 호출 (kis/kiwoom 모의 실측, 0.8.0) — 폴링은 안전망으로 유지
     minTickInterval = Duration.ofSeconds(1), // ON_TRADE 에서 연속 호출 사이 최소 간격 (캔들·계좌 REST 폭주 방지)
 )
 ```

@@ -55,6 +55,10 @@ abstract class ReconnectingWebSocket(
     @Volatile
     private var lastFrameAt: Long = System.currentTimeMillis()
 
+    /** 원시 텍스트 프레임 관찰용 훅 (프로토콜 실측·픽스처 채집). 파싱 전에 호출되며 예외는 무시된다 */
+    @Volatile
+    var rawFrameHook: ((String) -> Unit)? = null
+
     /** 소켓이 열려 있는지 — 로그인 필요 브로커는 하위 클래스가 별도 상태를 둔다 */
     @Volatile
     var isSocketOpen: Boolean = false
@@ -153,6 +157,7 @@ abstract class ReconnectingWebSocket(
     }
 
     private fun dispatch(text: String) {
+        rawFrameHook?.let { hook -> runCatching { hook(text) } }
         try {
             onMessage(text)
         } catch (e: Exception) {

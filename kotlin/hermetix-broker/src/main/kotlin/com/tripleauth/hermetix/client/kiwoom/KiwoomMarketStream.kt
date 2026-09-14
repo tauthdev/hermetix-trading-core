@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 키움 REST API 실시간 체결 스트림 (실시간 타입 `0B` 주식체결). 문서 기반 구현, 모의 실측 전.
+ * 키움 REST API 실시간 체결 스트림 (실시간 타입 `0B` 주식체결). 2026-09-14 모의투자 서버(mockapi) 장중 실측 통과.
  *
  * 프로토콜 (키움 REST API 가이드 — 실시간시세):
  * - 접속: 모의 `wss://mockapi.kiwoom.com:10000/api/dostk/websocket`, 실전 `wss://api.kiwoom.com:10000/…`
@@ -29,7 +29,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - `{"trnm":"PING"}` 은 받은 그대로 되돌려 보낸다
  *
  * values 의 FID: 20 체결시각 HHMMSS, 10 현재가, 11 전일대비, 12 등락율(%), 27 최우선매도호가, 28 최우선매수호가,
- * 15 거래량(+매수/-매도 체결), 13 누적거래량. REST 와 같이 가격에 등락 부호가 붙으므로 절대값으로 파싱한다.
+ * 15 거래량(+매수/-매도 체결), 13 누적거래량. REST 와 같이 가격·호가에 등락 부호가 붙으므로 절대값으로 파싱한다.
+ * 실측: LOGIN 응답에 `sor_yn` 이 추가로 오고, REAL 프레임은 `data` 키가 `trnm` 보다 앞에 온다(키 순서 무관). 실측 프레임은 `conformance/fixtures/kiwoom.json#stream`.
  */
 class KiwoomMarketStream(
     private val properties: KiwoomApiProperties,

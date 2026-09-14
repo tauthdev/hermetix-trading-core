@@ -82,7 +82,7 @@ class KisApiClient(
         fractionalShares = false,
         serverOpenOrders = false, // 모의 서버가 주문 조회를 제공하지 않음 - 어댑터 내부 추적
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
-        streams = setOf(StreamChannel.TRADES), // H0STCNT0 체결가 — 문서 기반, 모의 실측 전
+        streams = setOf(StreamChannel.TRADES), // H0STCNT0 체결가 — 2026-09 모의 실측
     )
 
     override val environment: TradingEnvironment = properties.environment
