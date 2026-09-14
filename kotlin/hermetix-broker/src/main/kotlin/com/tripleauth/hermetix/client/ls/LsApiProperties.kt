@@ -8,6 +8,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties
  *
  * 실전/모의는 **같은 호스트**를 쓰고 발급받은 appkey 로 서버가 라우팅한다. 따라서 [environment] 는 엔진의 실전 게이트용 선언이며
  * 어댑터가 키와 환경의 일치를 검증할 방법은 없다. 모의투자 주문은 종목코드에 `A` 접두가 필수라 어댑터는 항상 `A`+코드로 보낸다.
+ *
+ * 실시간 웹소켓([LsMarketStream])은 REST 와 달리 **포트가 갈린다** — 실전 9443, 모의 29443. 토큰은 발급일 익일 07:00 에 만료되므로
+ * 재접속 때마다 [LsApiClient] 의 캐시된 토큰(만료 시 재발급)을 다시 싣는다. 세션·구독 한도는 문서에 없다 (실측 전).
  */
 @ConfigurationProperties(prefix = "hermetix.ls")
 data class LsApiProperties(
@@ -25,4 +28,12 @@ data class LsApiProperties(
     val chartThrottleMillis: Long = 1100,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초). 토큰은 발급일 익일 07시까지 유효 */
     val tokenRefreshMarginSeconds: Long = 600,
-)
+    /** 실시간 웹소켓 주소. 비우면 환경에 따라 결정 — 모의 wss://openapi.ls-sec.co.kr:29443/websocket, 실전 wss://openapi.ls-sec.co.kr:9443/websocket */
+    val wsUrl: String = "",
+) {
+    val isLive: Boolean get() = environment == TradingEnvironment.LIVE
+
+    fun resolvedWsUrl(): String = wsUrl.ifBlank {
+        if (isLive) "wss://openapi.ls-sec.co.kr:9443/websocket" else "wss://openapi.ls-sec.co.kr:29443/websocket"
+    }
+}
