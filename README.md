@@ -26,16 +26,16 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 | <img src="https://www.google.com/s2/favicons?domain=nextsecurities.com&sz=64" width="28"/> | `next` | [넥스트증권](https://docs.nextsecurities.dev/) | 미국주식 | 1m · 1d | ❌ 스펙 없음 | ✅ | ✅ 키 프리픽스로 구분 | ✅ 검증 (공개 스펙 v1.3) |
 | <img src="https://www.google.com/s2/favicons?domain=koreainvestment.com&sz=64" width="28"/> | `kis` | [한국투자증권](https://apiportal.koreainvestment.com/) | KRX 국내주식 | 1d | ✅ 체결가·호가 · ⚠️ 주문통보 | ✅ | ✅ 호스트·TR 자동 전환 | ✅ 검증 (모의) |
 | <img src="https://www.google.com/s2/favicons?domain=kiwoom.com&sz=64" width="28"/> | `kiwoom` | [키움증권](https://openapi.kiwoom.com/) | KRX 국내주식 | 1d | ✅ 체결가·호가 · ⚠️ 주문통보 | ✅ | ✅ 호스트 자동 전환 | ✅ 검증 (모의) |
-| <img src="https://www.google.com/s2/favicons?domain=nhqv.com&sz=64" width="28"/> | `nh` | [NH투자증권 NH PLUG](https://www.nhplug.com/) | KRX 국내주식 | 1d | ❌ | ✅ 호스트 분리 | ✅ | ⚠️ 미검증 (문서 기반) |
-| <img src="https://www.google.com/s2/favicons?domain=dbsec.co.kr&sz=64" width="28"/> | `db` | [DB증권](https://openapi.dbsec.co.kr/) | KRX 국내주식 | 1d | ❌ | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
-| <img src="https://www.google.com/s2/favicons?domain=ls-sec.co.kr&sz=64" width="28"/> | `ls` | [LS증권](https://openapi.ls-sec.co.kr/) | KRX 국내주식 | 1d | ❌ | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
-| <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://openapi.tossinvest.com/) | KRX · 미국주식 | 1m · 1d | ❌ | ❌ 샌드박스 없음 | ✅ | ⚠️ 미검증 (실전 전용) |
-| <img src="https://www.google.com/s2/favicons?domain=kbsec.com&sz=64" width="28"/> | `kb` | [KB증권](https://openapi.kbsec.com/) | KRX 국내주식 | 1d | ❌ | ❌ "추후 제공" | ✅ 오픈베타 | ⚠️ 미검증 (실전 전용) |
+| <img src="https://www.google.com/s2/favicons?domain=nhqv.com&sz=64" width="28"/> | `nh` | [NH투자증권 NH PLUG](https://www.nhplug.com/) | KRX 국내주식 | 1d | ⚠️ 체결가·호가·주문통보 | ✅ 호스트 분리 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=dbsec.co.kr&sz=64" width="28"/> | `db` | [DB증권](https://openapi.dbsec.co.kr/) | KRX 국내주식 | 1d | ⚠️ 체결가·호가·주문통보 | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=ls-sec.co.kr&sz=64" width="28"/> | `ls` | [LS증권](https://openapi.ls-sec.co.kr/) | KRX 국내주식 | 1d | ⚠️ 체결가·호가·주문통보 | ✅ 키로 구분 | ✅ | ⚠️ 미검증 (문서 기반) |
+| <img src="https://www.google.com/s2/favicons?domain=tossinvest.com&sz=64" width="28"/> | `toss` | [토스증권](https://openapi.tossinvest.com/) | KRX · 미국주식 | 1m · 1d | ⚠️ 체결가·호가·주문통보 | ❌ 샌드박스 없음 | ✅ | ⚠️ 미검증 (실전 전용) |
+| <img src="https://www.google.com/s2/favicons?domain=kbsec.com&sz=64" width="28"/> | `kb` | [KB증권](https://openapi.kbsec.com/) | KRX 국내주식 | 1d | ❌ 스펙 없음 (REST 전용) | ❌ "추후 제공" | ✅ 오픈베타 | ⚠️ 미검증 (실전 전용) |
 
 ✅ 검증 = 실서버 스모크 테스트(시세→캔들→계좌→주문 전 구간)를 통과한 환경. KIS·키움의 실전은 호스트·TR ID 전환만 구현돼 있고 실계좌 스모크는 아직입니다.
 ⚠️ 미검증 = 공식 SDK·문서에서 엔드포인트와 필드명을 역추적해 만든 어댑터. 네 언어 컨포먼스 시나리오는 통과했지만 픽스처가 실측이 아니라 문서 재구성값이라, 모의계좌 실측으로 확인되기 전까지는 스펙 해석 오류가 있을 수 있습니다. 실측을 도와주실 분은 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)로 알려주세요.
 ⚠️ 실전 전용 = 모의투자 환경이 없어 실계좌로만 검증할 수 있는 브로커(`toss`, `kb`). 반드시 `hermetix.live.enabled: true` 와 주문 금액 상한(`hermetix.risk.*`)을 함께 설정하고 소액으로 시작하세요.
-실시간 = 웹소켓 스트림 채널(`StreamChannel` — 체결가 TRADES · 호가 ORDER_BOOK · 주문통보 ORDER_EVENTS). `✅` 는 모의 웹소켓 장중 실측 통과(2026-09), `⚠️ 주문통보` 는 구현·등록 확인까지만 되고 통보 프레임 실측 전(KIS 는 HTS ID 필요, 키움 모의는 일반 주문 가능한 계좌 필요), `❌` 는 미구현 또는 브로커 스펙에 없음. 스트림이 없는 브로커에서는 폴링만 동작합니다 ([동작 방식](#동작-방식)).
+실시간 = 웹소켓 스트림 채널(`StreamChannel` — 체결가 TRADES · 호가 ORDER_BOOK · 주문통보 ORDER_EVENTS). `✅` 는 모의 웹소켓 장중 실측 통과(2026-09), `⚠️` 는 구현은 됐지만 실측 전 — kis·kiwoom 의 주문통보(KIS 는 HTS ID 필요, 키움 모의는 일반 주문 가능한 계좌 필요)와 nh·db·ls·toss 의 전 채널(공식 문서·SDK·AsyncAPI 기반, 계좌 없음). `❌` 는 브로커 스펙에 웹소켓이 없음(넥스트 v1.3, KB 오픈베타 — 2026-09 명세 95개 전부 REST). 스트림이 없는 브로커에서는 폴링만 동작합니다 ([동작 방식](#동작-방식)).
 브로커별 지원 기능은 [`BrokerCapabilities`](kotlin/hermetix-broker/src/main/kotlin/com/tripleauth/hermetix/broker/BrokerCapabilities.kt) 로 코드에 선언되며(캔들 주기·지원 환경·시장·멱등키·실시간 채널 등), 엔진이 기동 시 전략-브로커 호환성을 검증합니다.
 
 2026-09 조사 시점에 REST 오픈 API 를 제공하는 국내 증권사는 위 표로 모두 붙였습니다 ([조사 보고서](claudedocs/korean-broker-openapi-survey-2026-09.md) — 미래에셋·삼성·대신·신한은 REST 미제공). 새 브로커를 원하시면 [새 브로커 요청 이슈](../../issues/new?template=broker-request.md)를 올려주세요 — 어댑터 기여는 [컨포먼스 킷](conformance/README.md) 절차(실측 픽스처 → 구현 → 네 언어 공통 시나리오 통과)를 따릅니다.
@@ -237,7 +237,7 @@ next / kis / kiwoom 어댑터       ← 인증, 레이트리밋, 방언 정규�
 
 - 엔진은 `pollInterval` 주기로 전략을 호출합니다 — 해당 브로커 시장의 정규장에만 (next=미국장 ET, kis/kiwoom=KRX KST)
 - `orderBook = true` 로 선언한 전략은 심볼 호가창 스트림을 구독해 `context.orderBook(symbol)` 로 10단계 호가·잔량을 받습니다. 브로커가 주문통보 채널을 제공하면 엔진이 자동 구독해 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고, KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다 (KIS 는 `hermetix.kis.hts-id` 필요)
-- `trigger = TickTrigger.ON_TRADE` 로 선언한 전략은 브로커 체결가 스트림(웹소켓)의 틱마다 호출됩니다 — 몰려온 틱은 하나로 합치고 `minTickInterval`(기본 1초)보다 촘촘히는 부르지 않으며, 스트림이 끊기면 `pollInterval` 폴링이 안전망으로 계속 돕니다. 스트림을 선언하지 않은 브로커에서는 경고 후 폴링으로 동작합니다 (kis·kiwoom 지원, 모의 실측 완료)
+- `trigger = TickTrigger.ON_TRADE` 로 선언한 전략은 브로커 체결가 스트림(웹소켓)의 틱마다 호출됩니다 — 몰려온 틱은 하나로 합치고 `minTickInterval`(기본 1초)보다 촘촘히는 부르지 않으며, 스트림이 끊기면 `pollInterval` 폴링이 안전망으로 계속 돕니다. 스트림을 선언하지 않은 브로커(next·kb)에서는 경고 후 폴링으로 동작합니다 (kis·kiwoom 모의 실측 완료, nh·db·ls·toss 문서 기반)
 - 기동 시 검증: 전략의 캔들 주기를 브로커가 지원하는지, 브로커 환경(모의/실전)이 선언된 것인지, 실전이면 명시 동의가 있는지 — 하나라도 어긋나면 스케줄하지 않습니다
 - `Signal.Sell` 은 보유 수량으로 자동 클램프됩니다 (공매도 방지). 주문 금액 상한(`hermetix.risk.*`)을 넘는 시그널은 제출하지 않습니다
 - 익절/손절(소프트웨어 브라켓)은 앱 메모리에서 관리됩니다 — 재시작 시 사라지므로 [전략 가이드](docs/strategy-guide.md)의 복원 패턴을 참고하세요

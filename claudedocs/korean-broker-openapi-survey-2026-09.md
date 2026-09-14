@@ -101,7 +101,7 @@
 | 형태·상태 | B2B 용 Open API 를 **2026-07-20 개인 대상 오픈베타** 개방. 포털 [openapi.kbsec.com](https://openapi.kbsec.com/intro) |
 | 모의투자 | **추후 제공 예정** (포털의 "모의거래 체험" 은 샘플 응답 체험) |
 | 인증 | App Key/Secret → OAuth2 client credentials. 토큰 수명 미확인 |
-| 시장·기능 | 국내주식 시세/주문(현재). 해외주식 주문·선물옵션은 11월까지 확대 예정. WS 미확인 |
+| 시장·기능 | 국내주식 시세/주문(현재). 해외주식 주문·선물옵션은 11월까지 확대 예정. **WS 없음** — 2026-09-14 재조사: 개인용 API 문서(JSON 명세 95개·Excel 80시트)가 전부 `protocolType: REST`, 실시간/웹소켓 언급 0건. 해외 시세는 15분 지연 |
 | Rate limit·에러 | "API 별 상이" — 로그인 후 문서 확인 필요 |
 | 문서 | 포털에서 Java/Python/JS 샘플 자동 생성. 공식 GitHub 없음 |
 

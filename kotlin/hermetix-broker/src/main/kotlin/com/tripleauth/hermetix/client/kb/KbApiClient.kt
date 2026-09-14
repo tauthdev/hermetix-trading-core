@@ -76,6 +76,7 @@ class KbApiClient(
         fractionalShares = false,
         serverOpenOrders = true, // SSQM2341 체결미체결 조회
         environments = setOf(TradingEnvironment.LIVE), // 모의투자 "추후 제공 예정"
+        // streams 미선언 — 2026-09 개인 오픈베타 명세(95 TR)에 웹소켓/실시간 없음. 폴링 전용
     )
 
     override val environment: TradingEnvironment = properties.environment
