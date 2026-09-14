@@ -37,5 +37,30 @@
           "orr_qty": 2, "orr_pr": 69000, "tot_cns_qty": 2, "cns_avg_uit_pr": 69000, "cns_amt": 138000, "cns_cnt": 1, "ny_cns_qty": 0, "cor_qty": 0, "can_qty": 0, "orr_tm": "090500000", "orr_rjt_rsn_cd_nm": "", "rmt_mkt_cd": "KRX" } ] } },
     { "method": "POST", "path": "/krstock/order/v1/cancel",
       "body": { "rsp_cd": "00000", "rsp_msg": "취소 주문이 완료되었습니다.", "Output_0": { "mkt_orr_no": 1236, "orr_gno_tab_cd": "01", "can_orr_qty1": 1, "can_cld_mkt_orr_no1": 1234 } } }
-  ]
+  ],
+  "stream": {
+    "description": "NH PLUG 웹소켓 — 문서 기반(포털 API 가이드 resExample 원문), 실측 전. 체결 mc(통합)/oc(KRX)/nc(NXT), 값은 전부 문자열, 시각은 KST HH:MM:SS, change 는 절대값+sign(4/5/8/9 하락), chrate 는 %",
+    "measured": false,
+    "channel": "TRADES",
+    "subscribe": { "tr_cd": "mc", "tr_key": "005940" },
+    "frames": [ "{\"header\": {\"tr_cd\": \"mc\", \"tr_key\": \"005940\"}, \"body\": {\"code\": \"005940\", \"time\": \"14:00:31\", \"sign\": \"2\", \"change\": \"2500\", \"price\": \"31750\", \"chrate\": \"8.55\", \"high\": \"32200\", \"low\": \"29450\", \"offer\": \"31750\", \"bid\": \"31700\", \"volume\": \"837624\", \"volrate\": \"81.75\", \"movolume\": \"13\", \"value\": \"26387\", \"open\": \"29600\", \"avgprice\": \"31503\", \"janggubun\": \"0\", \"bidrate\": \"57.65\", \"volpower\": \"137.24\", \"new_volume\": \"837624\", \"bidvolall\": \"482854\", \"offvolall\": \"351828\", \"kospigb\": \"1\", \"value_won\": \"26387679000\", \"marketgb\": \"1\", \"main_close\": \"0\", \"market_sign\": \"0\", \"market_change\": \"0\", \"market_chrate\": \"0.00\"}}" ],
+    "expected": [
+      { "symbol": "005940", "price": "31750", "quantity": "13", "time": "14:00:31", "askPrice": "31750", "bidPrice": "31700",
+        "cumulativeVolume": 837624, "change": "2500", "changeRate": "0.0855" }
+    ],
+    "orderBook": {
+      "description": "NH PLUG 호가 mb(통합)/ob/nb — 문서 기반. 1단계 접두 없음, 2단계 P_, 3단계 S_, 4~10단계 S4_~S10_; T_offerrem/T_bidrem 총잔량",
+      "measured": false,
+      "channel": "ORDER_BOOK",
+      "frames": [ "{\"header\": {\"tr_cd\": \"mb\", \"tr_key\": \"005940\"}, \"body\": {\"code\": \"005940\", \"hotime\": \"13:55:11\", \"offer\": \"31800\", \"bid\": \"31750\", \"offerrem\": \"668\", \"bidrem\": \"2899\", \"P_offer\": \"31850\", \"P_bid\": \"31700\", \"P_offerrem\": \"289\", \"P_bidrem\": \"1582\", \"S_offer\": \"31900\", \"S_bid\": \"31650\", \"S_offerrem\": \"40\", \"S_bidrem\": \"1508\", \"S4_offer\": \"31950\", \"S4_bid\": \"31600\", \"S4_offerrem\": \"317\", \"S4_bidrem\": \"2224\", \"S5_offer\": \"32000\", \"S5_bid\": \"31550\", \"S5_offerrem\": \"2923\", \"S5_bidrem\": \"659\", \"T_offerrem\": \"33938\", \"T_bidrem\": \"13132\", \"S6_offer\": \"32050\", \"S6_bid\": \"31500\", \"S6_offerrem\": \"3329\", \"S6_bidrem\": \"788\", \"S7_offer\": \"32100\", \"S7_bid\": \"31450\", \"S7_offerrem\": \"5659\", \"S7_bidrem\": \"918\", \"S8_offer\": \"32150\", \"S8_bid\": \"31400\", \"S8_offerrem\": \"4708\", \"S8_bidrem\": \"776\", \"S9_offer\": \"32200\", \"S9_bid\": \"31350\", \"S9_offerrem\": \"10399\", \"S9_bidrem\": \"607\", \"S10_offer\": \"32250\", \"S10_bid\": \"31300\", \"S10_offerrem\": \"5606\", \"S10_bidrem\": \"1171\", \"volume\": \"0\", \"krx_mid_prc\": \"31775\", \"krx_mid_offerrem\": \"0\", \"krx_mid_bidrem\": \"0\", \"nxt_mid_prc\": \"31775\", \"nxt_mid_offerrem\": \"0\", \"nxt_mid_bidrem\": \"0\", \"kospigb\": \"1\"}}" ],
+      "expected": [{"symbol": "005940", "time": "13:55:11", "asks": [{"price": "31800", "quantity": "668"}, {"price": "31850", "quantity": "289"}, {"price": "31900", "quantity": "40"}, {"price": "31950", "quantity": "317"}, {"price": "32000", "quantity": "2923"}, {"price": "32050", "quantity": "3329"}, {"price": "32100", "quantity": "5659"}, {"price": "32150", "quantity": "4708"}, {"price": "32200", "quantity": "10399"}, {"price": "32250", "quantity": "5606"}], "bids": [{"price": "31750", "quantity": "2899"}, {"price": "31700", "quantity": "1582"}, {"price": "31650", "quantity": "1508"}, {"price": "31600", "quantity": "2224"}, {"price": "31550", "quantity": "659"}, {"price": "31500", "quantity": "788"}, {"price": "31450", "quantity": "918"}, {"price": "31400", "quantity": "776"}, {"price": "31350", "quantity": "607"}, {"price": "31300", "quantity": "1171"}], "totalAskQuantity": "33938", "totalBidQuantity": "13132"}]
+    },
+    "orderEvents": {
+      "description": "NH PLUG 주문 통보 d3(접수)·d2(체결/정정/취소/거부 결과) — 문서 기반. tr_key 빈 문자열로 등록, itemgb 1 만 국내주식, 수량·가격은 0 패딩 문자열, orderno 는 선행 0 을 무시하고 비교",
+      "measured": false,
+      "channel": "ORDER_EVENTS",
+      "frames": [ "{\"header\": {\"tr_cd\": \"d3\"}, \"body\": {\"userid\": \"ID\", \"itemgb\": \"1\", \"accountno\": \"ACCOUNT NUMBER\", \"orderno\": \"0000000030\", \"orgordno\": \"\", \"ordercd\": \"10\", \"issuecd\": \"005940\", \"issuename\": \"NH투자증권\", \"slbygb\": \"2\", \"order_type\": \"01\", \"ordergty\": \"0000000010\", \"orderprc\": \"00000035550\", \"procnm\": \"00\", \"commcd\": \"F5\", \"order_cond\": \"0\", \"fundcode\": \"000\", \"sin_gb\": \"10\", \"order_time\": \"115606\", \"loan_date\": \"\", \"rmt_mkt_cd\": \"S\", \"snd_mkt_cd\": \"K\", \"ord_cond_prc\": \"00000000000\", \"sor_orrgb\": \"B\", \"mkt_order_qty\": \"0000000010\"}}", "{\"header\": {\"tr_cd\": \"d2\"}, \"body\": {\"userid\": \"ID\", \"itemgb\": \"1\", \"accountno\": \"ACCOUNT NUMBER\", \"orderno\": \"0000000030\", \"issuecd\": \"005940\", \"slbygb\": \"2\", \"concgty\": \"0000000005\", \"concprc\": \"00000035550\", \"conctime\": \"115606\", \"ucgb\": \"0\", \"rejgb\": \"0\", \"fundcode\": \"000\", \"sin_gb\": \"10\", \"loan_date\": \"\", \"ato_ord_tpe_chg\": \"0\", \"issue_nm\": \"NH투자증권\", \"rmt_mkt_cd\": \"S\", \"snd_mkt_cd\": \"K\", \"ord_cond_prc\": \"\", \"sor_orrgb\": \"B\", \"stop_efforn_gb\": \"\"}}" ],
+      "expected": [{"orderId": "0000000030", "type": "ACCEPTED", "time": "11:56:06", "symbol": "005940", "side": "BUY", "quantity": "10", "price": "35550"}, {"orderId": "0000000030", "type": "FILLED", "time": "11:56:06", "symbol": "005940", "side": "BUY", "quantity": "5", "price": "35550"}]
+    }
+  }
 }
