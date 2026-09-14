@@ -11,10 +11,13 @@ import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.broker.MarketClosedError
+import com.tripleauth.hermetix.broker.MarketStream
 import com.tripleauth.hermetix.broker.MarketSymbol
 import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.TradingEnvironment
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
@@ -70,7 +73,7 @@ import java.util.UUID
 class TossApiClient(
     private val properties: TossApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -85,6 +88,8 @@ class TossApiClient(
         serverOpenOrders = true,
         environments = setOf(TradingEnvironment.LIVE), // 모의투자 샌드박스 없음
         markets = setOf("KRX", "US"),
+        // 웹소켓 trade:{kr,us} / orderbook:{kr,us} / personal:order — AsyncAPI 1.2.2 기반, 실측 전
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -284,8 +289,13 @@ class TossApiClient(
     private fun buyingPower(currency: String): BigDecimal =
         call(HttpMethod.GET, "/api/v1/buying-power?currency=$currency", account = true).decimal("cashBuyingPower")
 
+    // ------------------------------------------------------------------ stream
+
+    /** 웹소켓은 REST 와 같은 토큰을 핸드셰이크 헤더에 싣고, 주문 이벤트 구독은 [accountSeq] 로 계좌를 고른다 */
+    override fun openStream(): MarketStream = TossMarketStream(properties, objectMapper, ::token, ::accountSeq)
+
     /** 계좌 순번 — 설정이 비어 있으면 `/api/v1/accounts` 의 첫 BROKERAGE 계좌 */
-    private fun accountSeq(): String {
+    internal fun accountSeq(): String {
         resolvedAccountSeq.takeIf { it.isNotBlank() }?.let { return it }
         synchronized(this) {
             resolvedAccountSeq.takeIf { it.isNotBlank() }?.let { return it }

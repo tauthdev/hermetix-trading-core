@@ -43,5 +43,36 @@
           "execution": { "filledQuantity": "2", "averageFilledPrice": "69000", "filledAmount": "138000", "commission": "20", "tax": null, "filledAt": "2026-09-10T09:05:03.000+09:00", "settlementDate": "2026-09-12" } } ] } } },
     { "method": "POST", "path": "/api/v1/orders/0d5QIHconformance1/cancel",
       "body": { "result": { "orderId": "0d5QIHconformance2" } } }
-  ]
+  ],
+  "stream": {
+    "description": "토스증권 웹소켓 (wss://openapi-ws.tossinvest.com/ws/v1, AsyncAPI 1.2.2 공식 예시 그대로) — 실측 전(모의투자 없음). 구독은 배열 하나로 전체 집합을 선언(trade:{kr,us}·orderbook:{kr,us}·personal:order), 핸드셰이크에 Bearer 토큰, 60초마다 텍스트 PING. 체결 프레임에는 누적거래량·등락·호가가 없어 null, 시각은 ISO-8601 +09:00",
+    "measured": false,
+    "channel": "TRADES",
+    "subscribe": [ { "type": "trade:us", "codes": ["AAPL"] }, { "type": "orderbook:kr", "codes": ["005930"] }, { "type": "personal:order", "codes": ["3"] } ],
+    "frames": [ "{\"type\":\"message\",\"topic\":\"trade:us:AAPL\",\"data\":{\"price\":\"243.26\",\"volume\":\"8\",\"timestamp\":\"2026-06-18T23:30:00.000+09:00\",\"currency\":\"USD\"}}" ],
+    "expected": [
+      { "symbol": "US:AAPL", "price": "243.26", "quantity": "8", "time": "23:30", "askPrice": null, "bidPrice": null,
+        "cumulativeVolume": null, "change": null, "changeRate": null }
+    ],
+    "orderBook": {
+      "description": "orderbook 프레임 — asks 오름차순·bids 내림차순(최우선부터), 단계 수는 문서에 미명시(가변), 총잔량 없음(null)",
+      "measured": false,
+      "channel": "ORDER_BOOK",
+      "frames": [ "{\"type\":\"message\",\"topic\":\"orderbook:kr:005930\",\"data\":{\"timestamp\":\"2026-06-18T23:30:00.000+09:00\",\"currency\":\"KRW\",\"asks\":[{\"price\":\"71500\",\"volume\":\"5\"}],\"bids\":[{\"price\":\"71400\",\"volume\":\"10\"}]}}" ],
+      "expected": [
+        { "symbol": "KRX:005930", "time": "23:30", "asks": [ { "price": "71500", "quantity": "5" } ], "bids": [ { "price": "71400", "quantity": "10" } ],
+          "totalAskQuantity": null, "totalBidQuantity": null }
+      ]
+    },
+    "orderEvents": {
+      "description": "personal:order 프레임 — event(PENDING/PARTIAL_FILL/FILL/CANCELED/REPLACED/…REJECTED) + REST 주문 스냅샷. execution.filledQuantity 는 누적이라 이번 체결량은 직전 스냅샷과의 차이(첫 스냅샷은 전체), 잔량 = quantity − filledQuantity, 시장은 currency(KRW→KRX, USD→US)",
+      "measured": false,
+      "channel": "ORDER_EVENTS",
+      "frames": [ "{\"type\":\"message\",\"topic\":\"personal:order:3\",\"data\":{\"event\":\"FILL\",\"accountSeq\":\"3\",\"order\":{\"orderId\":\"bAGzNvMOOTa5Uy0xVzYNbxDJ3Qpobwau4jDF3hyZZGWbpHm7wha8CFZc7aXVOWAl\",\"symbol\":\"AAPL\",\"side\":\"BUY\",\"orderType\":\"LIMIT\",\"timeInForce\":\"DAY\",\"status\":\"FILLED\",\"price\":\"100.5\",\"quantity\":\"10\",\"orderAmount\":null,\"currency\":\"USD\",\"orderedAt\":\"2026-06-23T09:30:00.000+09:00\",\"canceledAt\":null,\"execution\":{\"filledQuantity\":\"10\",\"averageFilledPrice\":\"100\",\"filledAmount\":\"1000\",\"commission\":\"1.23\",\"tax\":\"0\",\"settlementDate\":\"2026-06-25\"}}}}" ],
+      "expected": [
+        { "orderId": "bAGzNvMOOTa5Uy0xVzYNbxDJ3Qpobwau4jDF3hyZZGWbpHm7wha8CFZc7aXVOWAl", "type": "FILLED", "time": "09:30", "symbol": "US:AAPL", "side": "BUY",
+          "quantity": "10", "price": "100", "remainingQuantity": "0" }
+      ]
+    }
+  }
 }
