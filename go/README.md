@@ -84,6 +84,12 @@ hermetix.StrategySpec{
 - 스트림을 선언하지 않은 브로커에서 `TriggerOnTrade` 를 쓰면 경고 로그 후 폴링으로 동작합니다
 - 연결 계층만 쓸 때: `client.OpenStream()` → `Connect()` → `SubscribeTrades(symbols, func(tick hermetix.TradeTick) {...})`. 재접속·구독 복원은 스트림이 알아서 합니다
 
+### 호가·주문 통보 (2차 채널)
+
+- `StrategySpec{OrderBook: true}` 로 선언하면 심볼의 10단계 호가창을 구독해 `ctx.OrderBook(symbol)` 로 받습니다 (`BestAsk()/BestBid()`, `TotalAskQuantity/TotalBidQuantity`). 호가 틱은 전략을 촉발하지 않습니다. `kis`(H0STASP0)·`kiwoom`(0D) — 2026-09 모의 실측
+- 브로커가 주문 통보 채널을 제공하면 엔진이 자동 구독해, 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고(`BracketMonitor.OnOrderEvent`) KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다(`OrderEventApplier`). KIS 는 `SetHTSID(...)` 가 필요하고(통보 프레임은 AES 암호문 — 구독 응답의 key/iv 로 복호화), 없으면 경고 후 폴링 판정으로 동작합니다. 통보 프레임 자체는 아직 문서 기반(실측 전)입니다
+- 연결 계층만 쓸 때: `SubscribeOrderBook(symbols, func(hermetix.OrderBookTick){...})`, `SubscribeOrderEvents(func(hermetix.OrderEvent){...})` — 미지원 브로커는 error 를 돌려줍니다
+
 ## 공식 전략 예제 (examples/)
 
 Kotlin 전략 레포 3종과 동일 로직 (`examples` 패키지, 임포트 가능):

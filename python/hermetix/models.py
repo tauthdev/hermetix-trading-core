@@ -177,7 +177,9 @@ class Fill:
 
 class StreamChannel(Enum):
     """브로커가 제공하는 실시간 스트림 채널. BrokerCapabilities.streams 로 선언한다."""
-    TRADES = "TRADES"  # 체결가 스트림 - 체결이 일어날 때마다 TradeTick
+    TRADES = "TRADES"              # 체결가 - 체결이 일어날 때마다 TradeTick
+    ORDER_BOOK = "ORDER_BOOK"      # 호가 - 호가창이 바뀔 때마다 OrderBookTick (10단계)
+    ORDER_EVENTS = "ORDER_EVENTS"  # 내 주문의 접수·체결·취소·거부 통보 - OrderEvent
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,68 @@ class TradeTick:
         return Quote(symbol=self.symbol, price=self.price, bid_price=self.bid_price, ask_price=self.ask_price,
                      volume=self.cumulative_volume or 0, change=self.change, change_rate=self.change_rate,
                      timestamp=self.timestamp)
+
+
+@dataclass(frozen=True)
+class OrderBookLevel:
+    """호가 한 단계"""
+    price: Decimal
+    quantity: Decimal
+
+
+@dataclass(frozen=True)
+class OrderBookTick:
+    """호가창 스냅샷. asks/bids 는 최우선(1호가)부터 순서대로, 브로커가 주는 만큼(보통 10단계). 심볼은 구독 요청 표기 그대로."""
+    symbol: str
+    timestamp: datetime
+    asks: list[OrderBookLevel]
+    bids: list[OrderBookLevel]
+    total_ask_quantity: Decimal | None = None
+    total_bid_quantity: Decimal | None = None
+
+    @property
+    def best_ask(self) -> OrderBookLevel | None:
+        return self.asks[0] if self.asks else None
+
+    @property
+    def best_bid(self) -> OrderBookLevel | None:
+        return self.bids[0] if self.bids else None
+
+
+class OrderEventType(Enum):
+    ACCEPTED = "ACCEPTED"   # 주문 접수
+    FILLED = "FILLED"       # 체결 (부분 체결 포함 - OrderEvent.quantity 가 이번 체결량)
+    CANCELED = "CANCELED"   # 취소 확인
+    MODIFIED = "MODIFIED"   # 정정 확인
+    REJECTED = "REJECTED"   # 거부
+
+
+def normalize_order_id(order_id: str) -> str:
+    """앞자리 0 패딩 차이를 무시한 주문번호 (KIS 통보 10자리 vs REST ODNO 7자리 등)"""
+    return order_id.strip().lstrip("0") or "0"
+
+
+@dataclass(frozen=True)
+class OrderEvent:
+    """내 주문 통보 1건.
+
+    - order_id 는 브로커 주문번호. 브로커에 따라 REST 응답과 자릿수(0 패딩)가 다를 수 있어 비교는 order_id_matches 로 한다
+    - quantity/price 는 이벤트 종류에 따라 체결량·체결가(FILLED) 또는 주문량·주문가(그 외)
+    - remaining_quantity 는 브로커가 주는 경우만 (키움 902). KIS 통보에는 없다
+    """
+    order_id: str
+    type: OrderEventType
+    timestamp: datetime
+    symbol: str | None = None
+    side: OrderSide | None = None
+    quantity: Decimal | None = None
+    price: Decimal | None = None
+    remaining_quantity: Decimal | None = None
+    original_order_id: str | None = None
+    reason: str | None = None
+
+    def order_id_matches(self, other: str) -> bool:
+        return normalize_order_id(self.order_id) == normalize_order_id(other)
 
 
 @dataclass(frozen=True)

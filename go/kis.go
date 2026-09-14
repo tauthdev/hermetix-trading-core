@@ -10,6 +10,7 @@ package hermetix
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ type KisClient struct {
 	customBaseURL                       bool
 	wsURL                               string
 	customWsURL                         bool
+	htsID                               string
 	environment                         TradingEnvironment
 	http                                *http.Client
 	limiter                             *rateLimiter
@@ -104,6 +106,12 @@ func (c *KisClient) SetWSURL(wsURL string) *KisClient {
 	return c
 }
 
+// SetHTSID - HTS ID. 실시간 주문 통보(H0STCNI9/H0STCNI0) 구독 키 — 비우면 주문 통보 스트림을 쓰지 않는다.
+func (c *KisClient) SetHTSID(htsID string) *KisClient {
+	c.htsID = htsID
+	return c
+}
+
 func (c *KisClient) Environment() TradingEnvironment { return c.environment }
 
 // BaseURL - 현재 적용된 호스트.
@@ -126,7 +134,8 @@ func (c *KisClient) Capabilities() BrokerCapabilities {
 		FractionalShares: false,
 		ServerOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
 		Environments:     map[TradingEnvironment]bool{Paper: true, Live: true},
-		Streams:          []StreamChannel{StreamTrades}, // H0STCNT0 체결가 — 2026-09 모의 실측
+		// H0STCNT0 체결가·H0STASP0 호가 — 2026-09 모의 실측. H0STCNI9 주문 통보 — 문서 기반 (HTS ID 필요)
+		Streams: []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents},
 	}
 }
 
@@ -134,7 +143,59 @@ func (c *KisClient) Capabilities() BrokerCapabilities {
 
 // OpenStream - 체결가 웹소켓 스트림. 접속키는 접속마다 ApprovalKey 로 새로 받는다.
 func (c *KisClient) OpenStream() MarketStream {
-	return newKisMarketStream(c.wsURL, "P", c.ApprovalKey)
+	s := newKisMarketStream(c.wsURL, "P", c.ApprovalKey)
+	s.htsID = c.htsID
+	s.live = c.environment == Live
+	return s
+}
+
+// ApplyOrderEvent - 주문 통보를 메모리 추적에 반영한다 — 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던
+// 체결 판정을 통보가 오면 즉시 확정한다. 통보 주문번호는 10자리 0 패딩이라 OrderIDMatches 로 맞춘다.
+func (c *KisClient) ApplyOrderEvent(event OrderEvent) {
+	c.trackedMu.Lock()
+	defer c.trackedMu.Unlock()
+	for id, t := range c.tracked {
+		if !event.OrderIDMatches(id) {
+			continue
+		}
+		order := t.order
+		switch event.Type {
+		case OrderFilled:
+			filled := decimal.Zero
+			if order.FilledQuantity != nil {
+				filled = *order.FilledQuantity
+			}
+			if event.Quantity != nil {
+				filled = filled.Add(*event.Quantity)
+			}
+			total := filled
+			if order.Quantity != nil {
+				total = *order.Quantity
+			}
+			order.FilledQuantity = &filled
+			if event.Price != nil {
+				price := *event.Price
+				order.AvgFillPrice = &price
+			}
+			if filled.GreaterThanOrEqual(total) {
+				order.Status = Filled
+			} else {
+				order.Status = PartiallyFilled
+			}
+		case OrderCanceled:
+			at := event.Timestamp
+			order.Status = Canceled
+			order.CanceledAt = &at
+		case OrderRejected:
+			order.Status = Rejected
+		default: // ACCEPTED, MODIFIED — 상태 변화 없음
+			return
+		}
+		t.order = order
+		c.tracked[id] = t
+		log.Printf("INFO hermetix KIS order event applied / %s %s -> %s", id, event.Type, order.Status)
+		return
+	}
 }
 
 // ApprovalKey - 웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고

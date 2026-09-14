@@ -18,9 +18,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "websockets>=12"]
-# 실시간 체결가 스트림 (kis/kiwoom ON_TRADE) - 코어는 여전히 의존성 0
-stream = ["websockets>=12"]
+dev = ["pytest>=8", "websockets>=12", "cryptography>=42"]
+# 실시간 스트림 (kis/kiwoom 체결가·호가·주문통보) - 코어는 여전히 의존성 0. cryptography 는 KIS 주문 통보 AES 복호화용
+stream = ["websockets>=12", "cryptography>=42"]
 
 [tool.setuptools.packages.find]
 include = ["hermetix*"]

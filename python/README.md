@@ -1,6 +1,6 @@
 # Hermetix Python
 
-증권사 모의투자 통합 트레이딩 프레임워크 — Python 구현. **런타임 의존성 0개** (표준 라이브러리만). 실시간 체결가 스트림만 선택 의존성 `websockets` 를 씁니다 (`pip install 'hermetix[stream]'`).
+증권사 모의투자 통합 트레이딩 프레임워크 — Python 구현. **런타임 의존성 0개** (표준 라이브러리만). 실시간 스트림만 선택 의존성 `websockets`(+ KIS 주문 통보 복호화용 `cryptography`)를 씁니다 (`pip install 'hermetix[stream]'`).
 
 Kotlin 구현(레퍼런스)과 같은 동작을 보장합니다: 같은 브로커 어댑터 3종, 같은 전략 규약, 같은 안전장치. 금액은 전부 `Decimal` — float 를 섞지 마세요.
 
@@ -71,12 +71,12 @@ StrategyEngine(
 - 심볼에 시장 접두를 붙일 수 있습니다 (`KRX:005930`, `US:AAPL`). 접두 없는 심볼은 브로커 기본 시장으로 해석됩니다
 - 키는 항상 당신의 기기에서만 쓰입니다. Hermetix 는 어떤 서버로도 키를 보내지 않습니다
 
-## 실시간 체결가 스트림 (0.8.0)
+## 실시간 스트림 (0.8.0)
 
-`kis`·`kiwoom` 은 웹소켓 체결가 스트림을 제공합니다 (2026-09 모의 실측). 전략 코드는 그대로 두고 `trigger` 만 바꾸면 체결 틱마다 `decide()` 가 호출됩니다.
+`kis`·`kiwoom` 은 웹소켓 체결가·호가 스트림(2026-09 모의 실측)과 주문 통보 스트림(문서 기반, 실측 전)을 제공합니다. 전략 코드는 그대로 두고 `trigger` 만 바꾸면 체결 틱마다 `decide()` 가 호출됩니다.
 
 ```bash
-pip install 'hermetix[stream]'      # websockets 선택 의존성 — 코어는 여전히 의존성 0
+pip install 'hermetix[stream]'      # websockets + cryptography 선택 의존성 — 코어는 여전히 의존성 0
 ```
 
 ```python
@@ -86,7 +86,8 @@ class Scalper(Strategy):
     spec = StrategySpec(name="scalp", symbols=["005930"],
                         trigger=TickTrigger.ON_TRADE,          # 체결 틱마다 호출
                         min_tick_interval_seconds=1.0,         # 연속 호출 사이 최소 간격 (캔들·계좌 REST 폭주 방지)
-                        poll_interval_seconds=60)              # 스트림이 끊겼을 때의 안전망 주기
+                        poll_interval_seconds=60,              # 스트림이 끊겼을 때의 안전망 주기
+                        order_book=True)                       # 호가창 스트림도 구독 -> ctx.order_book(symbol)
     ...
 
 StrategyEngine(KisClient(appkey=..., appsecret=..., cano=...), [Scalper()]).run()
@@ -95,7 +96,9 @@ StrategyEngine(KisClient(appkey=..., appsecret=..., cano=...), [Scalper()]).run(
 - 몰려온 틱은 하나로 합쳐지고, 스트림이 끊기면 자동 재접속하는 동안 폴링이 계속 돕니다
 - 스트림 틱이 전략의 모든 심볼을 덮으면 `ctx.quote()` 는 REST 대신 마지막 체결 틱(가격·호가·누적거래량)입니다. 캔들·계좌·미체결은 여전히 REST
 - 스트림을 선언하지 않은 브로커(`next` 는 공개 스펙에 웹소켓 없음, 나머지는 미구현)에서 `ON_TRADE` 를 쓰면 경고 후 폴링으로 동작합니다
-- 프레임 파서: `hermetix.brokers.kis_stream.parse_kis_frame`, `hermetix.brokers.kiwoom_stream.parse_kiwoom_real` — 골든 픽스처 `conformance/fixtures/*.json#stream` 으로 검증
+- `order_book=True` 전략은 심볼의 10단계 호가창을 `ctx.order_book(symbol)` 로 받습니다 (`best_ask`/`best_bid`/`asks`/`bids`/총잔량). 호가는 틱을 촉발하지 않습니다
+- 브로커가 주문 통보 채널을 제공하면 엔진이 자동 구독해 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고, KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다. KIS 는 `KisClient(..., hts_id="HTS아이디")` 가 필요하고(통보 프레임은 AES 암호문이라 `cryptography` 사용), 비우면 경고 후 폴링 판정으로 동작합니다
+- 프레임 파서: `hermetix.brokers.kis_stream.parse_kis_frame / parse_kis_order_book / parse_kis_order_events`, `hermetix.brokers.kiwoom_stream.parse_kiwoom_real / parse_kiwoom_order_book / parse_kiwoom_order_events` — 골든 픽스처 `conformance/fixtures/*.json#stream` 으로 검증
 
 ## 수익률
 
@@ -113,8 +116,8 @@ hermetix/
 ├── broker.py     BrokerClient ABC + MarketStream/StreamingBrokerClient + HTTP/쓰로틀/KRX 캘린더
 ├── stream.py     ReconnectingWebSocket (websockets 선택 의존성, 재접속·유휴 감시·직렬 전송)
 ├── brokers/      next.py · kis.py · kiwoom.py · … (방언 정규화는 어댑터 책임), kis_stream.py · kiwoom_stream.py
-├── strategy.py   Strategy/StrategySpec(TickTrigger)/StrategyContext/Signal(Buy·Sell·Cancel)
-└── engine.py     StrategyEngine(ON_TRADE 트리거)/브라켓/비상정지/PnL
+├── strategy.py   Strategy/StrategySpec(TickTrigger·order_book)/StrategyContext(order_book)/Signal(Buy·Sell·Cancel)
+└── engine.py     StrategyEngine(ON_TRADE 트리거·호가·주문통보)/브라켓(통보로 활성화)/비상정지/PnL
 ```
 
 ## 공식 전략 예제 (examples/)

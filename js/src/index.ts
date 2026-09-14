@@ -29,23 +29,26 @@
 export { Decimal } from "./models.js";
 export type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, OrderType, Quote, StreamChannel, TimeInForce, TradeTick, TradingEnvironment,
+  Fill, Holding, MarketDay, Order, OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, Quote,
+  StreamChannel, TimeInForce, TradeTick, TradingEnvironment,
 } from "./models.js";
-export { isOpenStatus, parseSymbol, symbolCode, symbolCodeFor, symbolsMatch, tradeTickToQuote } from "./models.js";
+export {
+  bestAsk, bestBid, isOpenStatus, normalizeOrderId, orderIdMatches, parseSymbol, symbolCode, symbolCodeFor, symbolsMatch, tradeTickToQuote,
+} from "./models.js";
 export {
   AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
   MarketClosedError, OrderNotFoundError, RateLimitError,
 } from "./errors.js";
-export type { BrokerClient, MarketStream, StreamingBrokerClient, TradeListener } from "./broker.js";
+export type { BrokerClient, MarketStream, OrderBookListener, OrderEventListener, StreamingBrokerClient, TradeListener } from "./broker.js";
 export { RateLimiter, Throttle, isStreamingBrokerClient, krxTickRound } from "./broker.js";
 export { ReconnectingWebSocket } from "./stream.js";
 export { verifyBrokerConformance } from "./testing.js";
 export type { ConformanceReport, ConformanceScenario } from "./testing.js";
 export { NextClient } from "./brokers/next.js";
 export { KisClient } from "./brokers/kis.js";
-export { KisMarketStream, parseKisFrame } from "./brokers/kisStream.js";
+export { KisMarketStream, kisDecrypt, kisEncrypt, parseKisFrame, parseKisOrderBook, parseKisOrderEvents } from "./brokers/kisStream.js";
 export { KiwoomClient } from "./brokers/kiwoom.js";
-export { KiwoomMarketStream, parseKiwoomReal } from "./brokers/kiwoomStream.js";
+export { KiwoomMarketStream, parseKiwoomOrderBook, parseKiwoomOrderEvents, parseKiwoomReal } from "./brokers/kiwoomStream.js";
 export { NhClient } from "./brokers/nh.js";
 export { DbClient } from "./brokers/db.js";
 export { LsClient } from "./brokers/ls.js";

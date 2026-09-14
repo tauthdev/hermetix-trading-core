@@ -2,10 +2,13 @@
 (Kotlin StrategyEngineStreamTest 와 동일 시나리오)."""
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from hermetix import Account, BrokerCapabilities, CandleInterval, Quote, StreamChannel, TradeTick, TradingEnvironment
+from hermetix import (Account, BrokerCapabilities, CandleInterval, OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType,
+                      Quote, StreamChannel, TradeTick, TradingEnvironment)
+from hermetix.engine import BracketMonitor
 from hermetix.broker import MarketStream, StreamingBrokerClient
 from hermetix.engine import StrategyEngine
 from hermetix.strategy import Strategy, StrategyContext, StrategySpec, TickTrigger
@@ -18,6 +21,8 @@ class FakeStream(MarketStream):
 
     def __init__(self):
         self.listeners: list[tuple[list[str], object]] = []
+        self.book_listeners: list[tuple[list[str], object]] = []
+        self.order_listeners: list = []
         self.closed = False
 
     @property
@@ -30,8 +35,25 @@ class FakeStream(MarketStream):
     def subscribe_trades(self, symbols, listener) -> None:
         self.listeners.append((list(symbols), listener))
 
+    def subscribe_order_book(self, symbols, listener) -> None:
+        self.book_listeners.append((list(symbols), listener))
+
+    def subscribe_order_events(self, listener) -> None:
+        self.order_listeners.append(listener)
+
     def close(self) -> None:
         self.closed = True
+
+    def emit_book(self, symbol: str, ask: str, bid: str) -> None:
+        tick = OrderBookTick(symbol, datetime.now(timezone.utc),
+                             asks=[OrderBookLevel(Decimal(ask), Decimal(10))], bids=[OrderBookLevel(Decimal(bid), Decimal(10))])
+        for symbols, listener in self.book_listeners:
+            if symbol in symbols:
+                listener(tick)
+
+    def emit_order_event(self, event: OrderEvent) -> None:
+        for listener in self.order_listeners:
+            listener(event)
 
     def emit(self, symbol: str, price: str) -> None:
         tick = TradeTick(symbol=symbol, price=Decimal(price), quantity=Decimal(1),
@@ -48,10 +70,15 @@ class StreamingFakeBroker(FakeBroker, StreamingBrokerClient):
         client_order_id=False, native_bracket=False, fractional_shares=False,
         streams=frozenset({StreamChannel.TRADES}))
 
-    def __init__(self, stream: FakeStream):
+    def __init__(self, stream: FakeStream, streams=frozenset({StreamChannel.TRADES})):
         super().__init__()
         self.stream = stream
         self.quote_calls: list[list[str]] = []
+        self.applied: list[OrderEvent] = []
+        self.capabilities = replace(type(self).capabilities, streams=frozenset(streams))
+
+    def apply_order_event(self, event):
+        self.applied.append(event)
 
     def open_stream(self):
         return self.stream
@@ -170,3 +197,93 @@ def test_stop_closes_stream():
     assert engine.stream_connected
     engine.stop()
     assert stream.closed
+
+
+ALL_STREAMS = frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS})
+
+
+def test_order_book_spec_subscribes_and_latest_book_reaches_context():
+    stream = FakeStream()
+    broker = StreamingFakeBroker(stream, ALL_STREAMS)
+    strategy = Recording(replace(spec(["005930"]), order_book=True))
+    engine = StrategyEngine(broker, [strategy])
+    assert stream.book_listeners[0][0] == ["005930"]
+    run_in_thread(engine)
+    try:
+        await_calls(strategy, 1)
+        assert strategy.calls[0][1].order_book("005930") is None  # 아직 호가 없음
+        stream.emit_book("005930", ask="250500", bid="250000")
+        stream.emit("005930", "250500")
+        await_calls(strategy, 2)
+        book = strategy.calls[1][1].order_book("KRX:005930")  # 접두 무시 조회
+        assert book.best_ask.price == Decimal(250500) and book.best_bid.price == Decimal(250000)
+    finally:
+        engine.stop()
+
+
+def test_order_events_reach_broker_and_brackets():
+    stream = FakeStream()
+    broker = StreamingFakeBroker(stream, ALL_STREAMS)
+    engine = StrategyEngine(broker, [Recording(spec(["005930"]))])
+    try:
+        assert len(stream.order_listeners) == 1
+        engine.brackets.register("0012345", "005930", Decimal(1), take_profit=Decimal(260000), stop_loss=None)
+        event = OrderEvent(order_id="0000012345", type=OrderEventType.FILLED, timestamp=datetime.now(timezone.utc),
+                           quantity=Decimal(1))
+        stream.emit_order_event(event)
+        assert broker.applied == [event]
+        assert engine.brackets._brackets["0012345"].active  # 통보로 활성화 (서버 조회 없이)
+    finally:
+        engine.stop()
+
+
+def test_order_event_subscribe_failure_does_not_stop_engine():
+    class Failing(FakeStream):
+        def subscribe_order_events(self, listener):
+            raise ValueError("hts_id 필요")
+
+    stream = Failing()
+    engine = StrategyEngine(StreamingFakeBroker(stream, ALL_STREAMS), [Recording(spec(["005930"]))])
+    try:
+        assert [s.spec.name for s in engine.strategies] == ["s"]
+        assert stream.order_listeners == []
+    finally:
+        engine.stop()
+
+
+def _event(kind, order_id="0000ord_1", quantity=None):
+    return OrderEvent(order_id=order_id, type=kind, timestamp=datetime.now(timezone.utc),
+                      quantity=Decimal(quantity) if quantity is not None else None)
+
+
+def test_bracket_activates_by_accumulated_fill_events_without_server_lookup():
+    broker = FakeBroker()
+    monitor = BracketMonitor(broker)
+    monitor.register("ord_1", "AAPL", Decimal(2), take_profit=Decimal(310), stop_loss=None)
+    monitor.on_order_event(_event(OrderEventType.ACCEPTED))
+    monitor.on_order_event(_event(OrderEventType.FILLED, quantity="1"))  # 부분 체결 - 아직 비활성
+    assert not monitor._brackets["ord_1"].active
+    monitor.on_order_event(_event(OrderEventType.FILLED, quantity="1"))  # 누적 2 = 주문 수량 -> 활성
+    assert monitor._brackets["ord_1"].active
+
+    def boom(order_id):
+        raise AssertionError("활성화된 브라켓은 서버를 조회하지 않는다")
+    broker.get_order = boom
+    from test_engine import ctx
+    from hermetix import Holding
+    quotes = {"AAPL": Quote("AAPL", Decimal(311), None, None, 0, None, None, datetime.now(timezone.utc))}
+    signals = monitor.check(ctx(quotes=quotes, holdings={"AAPL": Holding("AAPL", Decimal(2), Decimal(280))}))
+    assert len(signals) == 1
+
+
+def test_bracket_dropped_by_cancel_or_reject_events_and_unrelated_ignored():
+    monitor = BracketMonitor(FakeBroker())
+    monitor.register("ord_1", "AAPL", Decimal(2), take_profit=Decimal(310), stop_loss=None)
+    monitor.on_order_event(_event(OrderEventType.CANCELED))
+    assert monitor.active_count == 0
+    monitor.register("ord_2", "AAPL", Decimal(2), take_profit=Decimal(310), stop_loss=None)
+    monitor.on_order_event(_event(OrderEventType.REJECTED, order_id="ord_2"))
+    assert monitor.active_count == 0
+    monitor.register("ord_3", "AAPL", Decimal(2), take_profit=Decimal(310), stop_loss=None)
+    monitor.on_order_event(_event(OrderEventType.CANCELED, order_id="other"))
+    assert monitor.active_count == 1

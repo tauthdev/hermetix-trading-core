@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -23,9 +24,11 @@ from ..errors import AuthError, BrokerApiError, MarketClosedError, OrderNotFound
 from ..models import (
     TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, OrderSide, OrderStatus, Quote, StreamChannel,
+    Fill, Holding, MarketDay, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, Quote, StreamChannel,
 )
 from .kis_stream import KisMarketStream
+
+logger = logging.getLogger("hermetix")
 
 
 def _d(value, default: str = "0") -> Decimal:
@@ -61,7 +64,8 @@ class KisClient(StreamingBrokerClient):
         fractional_shares=False,
         server_open_orders=False,  # 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
         environments=frozenset({TradingEnvironment.PAPER, TradingEnvironment.LIVE}),
-        streams=frozenset({StreamChannel.TRADES}),  # H0STCNT0 체결가 - 2026-09 모의 실측
+        # H0STCNT0 체결가·H0STASP0 호가 - 2026-09 모의 실측. H0STCNI9 주문 통보 - 문서 기반 (HTS ID 필요)
+        streams=frozenset({StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS}),
     )
 
     def _tr(self, suffix: str) -> str:
@@ -77,12 +81,14 @@ class KisClient(StreamingBrokerClient):
                  custtype: str = "P", base_url: str = "",
                  throttle_seconds: float = 0.0,
                  environment: TradingEnvironment = TradingEnvironment.PAPER,
-                 ws_url: str = ""):
+                 ws_url: str = "", hts_id: str = ""):
         """base_url 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
         throttle_seconds 0 이면 자동 — 모의 0.6(초당 2건), 실전 0.1(초당 20건 한도의 절반).
-        계좌 TR ID 는 모의 V / 실전 T 프리픽스. ws_url 을 비우면 실시간 웹소켓은 모의 ops:31000 / 실전 ops:21000."""
+        계좌 TR ID 는 모의 V / 실전 T 프리픽스. ws_url 을 비우면 실시간 웹소켓은 모의 ops:31000 / 실전 ops:21000.
+        hts_id 는 실시간 주문 통보(H0STCNI9/H0STCNI0) 구독 키 - 비우면 주문 통보 스트림을 쓰지 않는다."""
         self.environment = environment
         self._ws_url = ws_url or (self.LIVE_WS_URL if environment == TradingEnvironment.LIVE else self.PAPER_WS_URL)
+        self._hts_id = hts_id
         self._appkey = appkey
         self._appsecret = appsecret
         self._cano = cano
@@ -313,7 +319,32 @@ class KisClient(StreamingBrokerClient):
     # ------------------------------------------------------------------ stream
 
     def open_stream(self) -> MarketStream:
-        return KisMarketStream(self._ws_url, self._custtype, self.approval_key)
+        return KisMarketStream(self._ws_url, self._custtype, self.approval_key, hts_id=self._hts_id,
+                               live=self.environment == TradingEnvironment.LIVE)
+
+    def apply_order_event(self, event: OrderEvent) -> None:
+        """주문 통보를 메모리 추적에 반영한다 - 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던 체결 판정을
+        통보가 오면 즉시 확정한다. 통보 주문번호는 10자리 0 패딩이라 order_id_matches 로 맞춘다."""
+        order_id = next((oid for oid in self._tracked if event.order_id_matches(oid)), None)
+        if order_id is None:
+            return
+        tracked = self._tracked[order_id]
+        order = tracked.order
+        if event.type == OrderEventType.FILLED:
+            filled = (order.filled_quantity or Decimal(0)) + (event.quantity or Decimal(0))
+            total = order.quantity if order.quantity is not None else filled
+            done = filled >= total
+            updated = replace(order, filled_quantity=filled,
+                              avg_fill_price=event.price if event.price is not None else order.avg_fill_price,
+                              status=OrderStatus.FILLED if done else OrderStatus.PARTIALLY_FILLED)
+        elif event.type == OrderEventType.CANCELED:
+            updated = replace(order, status=OrderStatus.CANCELED, canceled_at=event.timestamp)
+        elif event.type == OrderEventType.REJECTED:
+            updated = replace(order, status=OrderStatus.REJECTED)
+        else:
+            return  # ACCEPTED / MODIFIED - 상태 변화 없음
+        self._tracked[order_id] = replace(tracked, order=updated)
+        logger.info("KIS order event applied / %s %s -> %s", order_id, event.type.value, updated.status.value)
 
     def approval_key(self) -> str:
         """웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 - 접속마다 새로 받아도 무방하다.

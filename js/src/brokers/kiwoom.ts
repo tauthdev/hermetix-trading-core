@@ -40,7 +40,8 @@ export class KiwoomClient implements StreamingBrokerClient {
     fractionalShares: false,
     serverOpenOrders: true, // ka10075 미체결 조회 제공
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
-    streams: new Set(["TRADES"]), // 0B 주식체결 — 2026-09 모의 실측
+    // 0B 주식체결·0D 호가 — 2026-09 모의 실측. 00 주문체결 — 문서 기반 (통보 프레임 실측 전)
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]),
   };
 
   private token: string | null = null;

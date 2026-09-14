@@ -50,7 +50,23 @@ type MarketStream interface {
 	IsConnected() bool
 	Connect()
 	SubscribeTrades(symbols []string, listener TradeListener)
+	// SubscribeOrderBook - 호가창 구독. 브로커가 StreamOrderBook 을 선언하지 않았으면 error
+	SubscribeOrderBook(symbols []string, listener OrderBookListener) error
+	// SubscribeOrderEvents - 계좌 전체의 주문 통보 구독 (심볼 지정 없음). 미지원이면 error
+	SubscribeOrderEvents(listener OrderEventListener) error
 	Close() error
+}
+
+// OrderBookListener - 호가창 수신자. 스트림 고루틴에서 호출된다.
+type OrderBookListener func(OrderBookTick)
+
+// OrderEventListener - 주문 통보 수신자. 스트림 고루틴에서 호출된다.
+type OrderEventListener func(OrderEvent)
+
+// OrderEventApplier - 엔진이 받은 주문 통보를 어댑터에 전달하는 선택 인터페이스. 서버 주문 조회가 없어 메모리로 추적하는
+// 어댑터(KIS 모의)는 여기서 체결·취소를 반영해 GetOrder 가 즉시 맞는 상태를 돌려주게 한다.
+type OrderEventApplier interface {
+	ApplyOrderEvent(event OrderEvent)
 }
 
 // StreamingBrokerClient - 실시간 스트림을 제공하는 어댑터. Capabilities().Streams 가 비어있지 않은 어댑터만 구현한다.

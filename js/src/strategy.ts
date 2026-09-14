@@ -1,7 +1,7 @@
 /** 전략 SPI - 전략 작성자가 구현하는 유일한 표면. */
 import { Decimal } from "decimal.js";
 import type {
-  Account, Candle, CandleInterval, Holding, Order, OrderType, Quote, TimeInForce,
+  Account, Candle, CandleInterval, Holding, Order, OrderBookTick, OrderType, Quote, TimeInForce,
 } from "./models.js";
 import { symbolsMatch } from "./models.js";
 
@@ -14,6 +14,7 @@ export interface StrategySpec {
   regularHoursOnly?: boolean;            // 기본 true
   trigger?: TickTrigger;                 // 기본 "POLL"
   minTickIntervalMs?: number;            // 기본 1000 — ON_TRADE 연속 호출 사이 최소 간격 (캔들·계좌 REST 폭주 방지)
+  orderBook?: boolean;                   // 기본 false — true 면 심볼 호가창 스트림을 구독해 ctx.orderBook(symbol) 로 공급 (ORDER_BOOK 채널 브로커만)
 }
 
 /**
@@ -73,7 +74,11 @@ export class StrategyContext {
     public readonly holdings: ReadonlyMap<string, Holding>,
     public readonly openOrders: readonly Order[],
     public readonly buyingPower: Decimal,
+    /** 심볼별 최신 호가창 — spec.orderBook 을 켠 전략에만, 스트림이 한 번이라도 준 심볼만 */
+    public readonly orderBooks: ReadonlyMap<string, OrderBookTick> = new Map(),
   ) {}
+
+  orderBook(symbol: string): OrderBookTick | undefined { return bySymbol(this.orderBooks, symbol); }
 
   // 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (symbolsMatch)
   quote(symbol: string): Quote | undefined { return bySymbol(this.quotes, symbol); }

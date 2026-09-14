@@ -2,9 +2,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { parseKisFrame } from "../src/brokers/kisStream.js";
-import { parseKiwoomReal } from "../src/brokers/kiwoomStream.js";
-import type { TradeTick } from "../src/models.js";
+import { parseKisFrame, parseKisOrderBook, parseKisOrderEvents } from "../src/brokers/kisStream.js";
+import { parseKiwoomOrderBook, parseKiwoomOrderEvents, parseKiwoomReal } from "../src/brokers/kiwoomStream.js";
+import type { OrderBookTick, OrderEvent, TradeTick } from "../src/models.js";
 
 const fixturesDir = new URL("../../../conformance/fixtures/", import.meta.url);
 const TODAY = "2026-09-14";
@@ -14,12 +14,51 @@ interface Expected {
   cumulativeVolume: number; change: string; changeRate: string;
 }
 
+interface Level { price: string; quantity: string; }
+interface ExpectedBook { symbol: string; time: string; asks: Level[]; bids: Level[]; totalAskQuantity: string; totalBidQuantity: string; }
+interface ExpectedEvent {
+  orderId: string; type: string; time: string; symbol: string; side: string; quantity: string; price: string;
+  remainingQuantity?: string; originalOrderId?: string;
+}
+interface Section<E> { channel: string; frames: string[]; expected: E[]; measured?: boolean; }
+
 function stream(broker: string) {
   const fx = JSON.parse(readFileSync(new URL(`${broker}.json`, fixturesDir), "utf-8")) as {
-    stream: { channel: string; frames: string[]; expected: Expected[] };
+    stream: Section<Expected> & { orderBook: Section<ExpectedBook>; orderEvents: Section<ExpectedEvent> };
   };
   assert.ok(fx.stream, `${broker} 픽스처에 stream 섹션이 없다`);
   return fx.stream;
+}
+
+function assertBooks(books: OrderBookTick[], expected: ExpectedBook[]) {
+  assert.equal(books.length, expected.length);
+  books.forEach((book, i) => {
+    const e = expected[i];
+    assert.equal(book.symbol, e.symbol);
+    assert.equal(kstTime(book.timestamp), e.time);
+    const levels = (ls: { price: { toFixed(): string }; quantity: { toFixed(): string } }[]) => ls.map((l) => ({ price: l.price.toFixed(), quantity: l.quantity.toFixed() }));
+    assert.deepEqual(levels(book.asks), e.asks);
+    assert.deepEqual(levels(book.bids), e.bids);
+    assert.ok(book.totalAskQuantity!.eq(e.totalAskQuantity), "totalAskQuantity");
+    assert.ok(book.totalBidQuantity!.eq(e.totalBidQuantity), "totalBidQuantity");
+  });
+}
+
+function assertEvents(events: OrderEvent[], expected: ExpectedEvent[]) {
+  assert.equal(events.length, expected.length);
+  events.forEach((ev, i) => {
+    const e = expected[i];
+    assert.equal(ev.orderId, e.orderId);
+    assert.equal(ev.type, e.type);
+    assert.equal(kstTime(ev.timestamp), e.time);
+    assert.equal(ev.symbol, e.symbol);
+    assert.equal(ev.side, e.side);
+    assert.ok(ev.quantity!.eq(e.quantity), `quantity ${ev.quantity} != ${e.quantity}`);
+    assert.ok(ev.price!.eq(e.price), `price ${ev.price} != ${e.price}`);
+    if (e.remainingQuantity !== undefined) assert.ok(ev.remainingQuantity!.eq(e.remainingQuantity), "remainingQuantity");
+    if (e.originalOrderId !== undefined) assert.equal(ev.originalOrderId, e.originalOrderId);
+    else assert.equal(ev.originalOrderId ?? undefined, undefined);
+  });
 }
 
 const kstTime = (d: Date) =>
@@ -70,4 +109,27 @@ test("kiwoom 파서 - 0B 외 타입 무시, A 프리픽스 제거", () => {
   assert.equal(tick.symbol, "005930");
   assert.ok(tick.price.eq(71500));
   assert.ok(tick.quantity.eq(15));
+});
+
+test("kis - H0STASP0 호가 프레임 (실측)", () => {
+  const section = stream("kis").orderBook;
+  assert.equal(section.channel, "ORDER_BOOK");
+  assertBooks(section.frames.flatMap((f) => parseKisOrderBook(f, TODAY)), section.expected);
+});
+
+test("kis - H0STCNI9 주문 통보 프레임 (복호화 후 평문, 문서 기반)", () => {
+  const section = stream("kis").orderEvents;
+  assert.equal(section.measured, false);
+  assertEvents(section.frames.flatMap((f) => parseKisOrderEvents(f, TODAY)), section.expected);
+});
+
+test("kiwoom - 0D 호가 프레임 (실측)", () => {
+  const section = stream("kiwoom").orderBook;
+  assertBooks(section.frames.flatMap((f) => parseKiwoomOrderBook(JSON.parse(f), TODAY)), section.expected);
+});
+
+test("kiwoom - 00 주문체결 프레임 (문서 기반)", () => {
+  const section = stream("kiwoom").orderEvents;
+  assert.equal(section.measured, false);
+  assertEvents(section.frames.flatMap((f) => parseKiwoomOrderEvents(JSON.parse(f), TODAY)), section.expected);
 });

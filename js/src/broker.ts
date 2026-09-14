@@ -3,7 +3,7 @@ import { Decimal } from "decimal.js";
 import { RateLimitError } from "./errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, Quote, TradeTick, TradingEnvironment,
+  Fill, Holding, MarketDay, Order, OrderBookTick, OrderEvent, Quote, TradeTick, TradingEnvironment,
 } from "./models.js";
 
 export interface BrokerClient {
@@ -24,18 +24,24 @@ export interface BrokerClient {
 }
 
 export type TradeListener = (tick: TradeTick) => void;
+export type OrderBookListener = (tick: OrderBookTick) => void;
+export type OrderEventListener = (event: OrderEvent) => void;
 
 /**
  * 실시간 시장 데이터 스트림. 규약:
  * - connect() 후 연결이 끊기면 스스로 지수 백오프로 재연결하고, 재연결 시 기존 구독을 다시 보낸다
  * - subscribeTrades 는 연결 전에 불러도 된다 — 연결되는 순간 전송된다
  * - 리스너 예외는 스트림이 삼키고 로그만 남긴다. close() 뒤에는 재연결하지 않는다
+ * - 선언하지 않은 채널(capabilities.streams)의 subscribe 는 throw
  */
 export interface MarketStream {
   /** 소켓이 열려 있고 (브로커가 요구하면) 로그인까지 끝났는지 */
   readonly isConnected: boolean;
   connect(): void;
   subscribeTrades(symbols: string[], listener: TradeListener): void;
+  subscribeOrderBook(symbols: string[], listener: OrderBookListener): void;
+  /** 계좌 전체의 주문 통보 — 심볼 지정 없음 */
+  subscribeOrderEvents(listener: OrderEventListener): void;
   close(): void;
 }
 
@@ -43,6 +49,11 @@ export interface MarketStream {
 export interface StreamingBrokerClient extends BrokerClient {
   /** 새 스트림 인스턴스. 연결은 호출자가 connect() 로 시작한다 */
   openStream(): MarketStream;
+  /**
+   * 엔진이 받은 주문 통보를 어댑터에 전달한다. 서버 주문 조회가 없어 메모리로 추적하는 어댑터(KIS 모의)는
+   * 여기서 체결·취소를 반영해 getOrder 가 즉시 맞는 상태를 돌려주게 한다. 없으면 아무것도 안 한다
+   */
+  applyOrderEvent?(event: OrderEvent): void;
 }
 
 export function isStreamingBrokerClient(broker: BrokerClient): broker is StreamingBrokerClient {

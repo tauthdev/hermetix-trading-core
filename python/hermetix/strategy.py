@@ -30,7 +30,7 @@ from enum import Enum
 
 from .models import (
     symbols_match,
-    Account, Candle, CandleInterval, Holding, Order, OrderType, Quote, TimeInForce,
+    Account, Candle, CandleInterval, Holding, Order, OrderBookTick, OrderType, Quote, TimeInForce,
 )
 
 
@@ -60,6 +60,8 @@ class StrategySpec:
     trigger: TickTrigger = TickTrigger.POLL
     # ON_TRADE 에서 연속 호출 사이의 최소 간격. REST 호출(캔들·계좌) 폭주를 막는다
     min_tick_interval_seconds: float = 1.0
+    # True 면 심볼의 호가창 스트림을 구독해 StrategyContext.order_book() 으로 공급한다 (브로커가 ORDER_BOOK 채널을 선언한 경우만)
+    order_book: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,11 +106,16 @@ class StrategyContext:
     holdings: dict[str, Holding]
     open_orders: list[Order]
     buying_power: Decimal
+    # 심볼별 최신 호가창 - StrategySpec.order_book 을 켠 전략에만, 스트림이 한 번이라도 준 심볼만
+    order_books: dict[str, OrderBookTick] = field(default_factory=dict)
 
     # 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (symbols_match)
 
     def quote(self, symbol: str) -> Quote | None:
         return _by_symbol(self.quotes, symbol)
+
+    def order_book(self, symbol: str) -> OrderBookTick | None:
+        return _by_symbol(self.order_books, symbol)
 
     def candles_of(self, symbol: str) -> list[Candle]:
         return _by_symbol(self.candles, symbol) or []

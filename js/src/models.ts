@@ -155,8 +155,8 @@ export interface BrokerCapabilities {
   streams?: ReadonlySet<StreamChannel>;
 }
 
-/** 브로커가 제공하는 실시간 스트림 채널 (BrokerCapabilities.streams 로 선언) */
-export type StreamChannel = "TRADES";
+/** 브로커가 제공하는 실시간 스트림 채널 (BrokerCapabilities.streams 로 선언) — 체결가 / 호가(10단계) / 내 주문 통보 */
+export type StreamChannel = "TRADES" | "ORDER_BOOK" | "ORDER_EVENTS";
 
 /**
  * 체결 1건 — 브로커 프레임을 공통 모델로 정규화한 것.
@@ -173,6 +173,52 @@ export interface TradeTick {
   change?: Decimal | null;
   changeRate?: Decimal | null;
 }
+
+/** 호가 한 단계 */
+export interface OrderBookLevel { price: Decimal; quantity: Decimal; }
+
+/** 호가창 스냅샷. asks/bids 는 최우선(1호가)부터 순서대로, 브로커가 주는 만큼(보통 10단계). 심볼은 구독 요청 표기 그대로 */
+export interface OrderBookTick {
+  symbol: string;
+  timestamp: Date;
+  asks: OrderBookLevel[];
+  bids: OrderBookLevel[];
+  totalAskQuantity?: Decimal | null;
+  totalBidQuantity?: Decimal | null;
+}
+
+export const bestAsk = (tick: OrderBookTick): OrderBookLevel | undefined => tick.asks[0];
+export const bestBid = (tick: OrderBookTick): OrderBookLevel | undefined => tick.bids[0];
+
+/** ACCEPTED 접수 / FILLED 체결(부분 포함 — quantity 가 이번 체결량) / CANCELED 취소 확인 / MODIFIED 정정 확인 / REJECTED 거부 */
+export type OrderEventType = "ACCEPTED" | "FILLED" | "CANCELED" | "MODIFIED" | "REJECTED";
+
+/**
+ * 내 주문 통보 1건.
+ * - orderId 는 브로커 주문번호. REST 응답과 자릿수(0 패딩)가 다를 수 있어 비교는 orderIdMatches 로
+ * - quantity/price 는 FILLED 면 체결량·체결가, 그 외는 주문량·주문가
+ * - remainingQuantity 는 브로커가 주는 경우만 (키움 902). KIS 통보에는 없다
+ */
+export interface OrderEvent {
+  orderId: string;
+  type: OrderEventType;
+  timestamp: Date;
+  symbol?: string | null;
+  side?: OrderSide | null;
+  quantity?: Decimal | null;
+  price?: Decimal | null;
+  remainingQuantity?: Decimal | null;
+  originalOrderId?: string | null;
+  reason?: string | null;
+}
+
+/** 앞자리 0 패딩을 무시한 주문번호 정규화 (KIS 통보 10자리 vs REST ODNO 7자리 등) */
+export function normalizeOrderId(id: string): string {
+  const t = id.trim().replace(/^0+/, "");
+  return t === "" ? "0" : t;
+}
+
+export const orderIdMatches = (a: string, b: string): boolean => normalizeOrderId(a) === normalizeOrderId(b);
 
 /** 스트림 틱을 REST 현재가와 같은 모양으로 — 엔진이 quotes 호출을 아낄 때 쓴다 */
 export function tradeTickToQuote(tick: TradeTick): Quote {

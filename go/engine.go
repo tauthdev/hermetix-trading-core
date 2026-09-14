@@ -141,12 +141,13 @@ func (g *TradingGuard) Resume() {
 }
 
 type bracket struct {
-	entryOrderID string
-	symbol       string
-	quantity     decimal.Decimal
-	takeProfit   *decimal.Decimal
-	stopLoss     *decimal.Decimal
-	active       bool
+	entryOrderID   string
+	symbol         string
+	quantity       decimal.Decimal
+	takeProfit     *decimal.Decimal
+	stopLoss       *decimal.Decimal
+	active         bool
+	filledQuantity decimal.Decimal // 주문 통보로 누적된 체결량
 }
 
 // BracketMonitor - 소프트웨어 익절/손절. 상태는 메모리에만 (재시작 시 소실).
@@ -166,7 +167,7 @@ func (b *BracketMonitor) Register(entryOrderID, symbol string, quantity decimal.
 		return
 	}
 	b.mu.Lock()
-	b.brackets[entryOrderID] = &bracket{entryOrderID, symbol, quantity, takeProfit, stopLoss, false}
+	b.brackets[entryOrderID] = &bracket{entryOrderID: entryOrderID, symbol: symbol, quantity: quantity, takeProfit: takeProfit, stopLoss: stopLoss}
 	b.mu.Unlock()
 	log.Printf("INFO hermetix bracket registered / %s %s qty=%s", entryOrderID, symbol, quantity)
 }
@@ -234,6 +235,32 @@ func (b *BracketMonitor) resolveEntry(br *bracket) bool {
 		log.Printf("INFO hermetix bracket dropped / entry %s %s", order.Status, br.entryOrderID)
 	}
 	return false
+}
+
+// OnOrderEvent - 주문 통보로 진입 주문 상태를 바로 반영한다 (서버 조회 없이). 체결은 누적해 주문 수량을 채우면 활성화,
+// 취소·거부는 폐기. 통보가 없는 브로커에서는 기존처럼 틱마다 resolveEntry 가 조회한다.
+func (b *BracketMonitor) OnOrderEvent(event OrderEvent) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, br := range b.brackets {
+		if !event.OrderIDMatches(id) {
+			continue
+		}
+		switch event.Type {
+		case OrderFilled:
+			if event.Quantity != nil {
+				br.filledQuantity = br.filledQuantity.Add(*event.Quantity)
+			}
+			if !br.active && br.filledQuantity.GreaterThanOrEqual(br.quantity) {
+				br.active = true
+				log.Printf("INFO hermetix bracket activated / entry filled by event %s", id)
+			}
+		case OrderCanceled, OrderRejected:
+			delete(b.brackets, id)
+			log.Printf("INFO hermetix bracket dropped / entry %s by event %s", event.Type, id)
+		}
+		return
+	}
 }
 
 func (b *BracketMonitor) ActiveCount() int {
@@ -446,10 +473,12 @@ type StrategyEngine struct {
 	// 스트림 상태 — 스트림 고루틴과 루프 고루틴이 공유한다
 	streamMu      sync.Mutex
 	stream        MarketStream
-	latestTrades  map[string]TradeTick // 심볼(요청 표기) → 마지막 체결 틱
-	pending       map[string]bool      // 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용)
-	lastTickEnded map[string]time.Time // 전략 이름 → 직전 tick 종료 시각
-	wake          chan struct{}        // 스트림 틱 도착 신호 (버퍼 1 — 몰려도 한 번만 깨운다)
+	latestTrades  map[string]TradeTick     // 심볼(요청 표기) → 마지막 체결 틱
+	latestBooks   map[string]OrderBookTick // 심볼(요청 표기) → 마지막 호가창 (OrderBook 전략만)
+	orderEventsOn bool                     // 주문 통보 구독 여부 — 한 번만
+	pending       map[string]bool          // 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용)
+	lastTickEnded map[string]time.Time     // 전략 이름 → 직전 tick 종료 시각
+	wake          chan struct{}            // 스트림 틱 도착 신호 (버퍼 1 — 몰려도 한 번만 깨운다)
 }
 
 // EngineOptions - 실전 게이트와 주문 금액 상한.
@@ -509,6 +538,7 @@ func NewStrategyEngineWithOptions(broker BrokerClient, strategies []Strategy, op
 		Strategies:    accepted,
 		stop:          make(chan struct{}),
 		latestTrades:  map[string]TradeTick{},
+		latestBooks:   map[string]OrderBookTick{},
 		pending:       map[string]bool{},
 		lastTickEnded: map[string]time.Time{},
 		wake:          make(chan struct{}, 1),
@@ -574,36 +604,92 @@ func (e *StrategyEngine) StreamConnected() bool {
 	return stream != nil && stream.IsConnected()
 }
 
-// attachStreams - TriggerOnTrade 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다.
+// streamFor - 브로커가 채널을 제공하면 공유 스트림을 (필요 시 열어) 돌려주고, 아니면 nil.
+func (e *StrategyEngine) streamFor(channel StreamChannel) MarketStream {
+	streaming, ok := e.Broker.(StreamingBrokerClient)
+	if !ok || !e.Broker.Capabilities().HasStream(channel) {
+		return nil
+	}
+	e.streamMu.Lock()
+	defer e.streamMu.Unlock()
+	if e.stream == nil {
+		e.stream = streaming.OpenStream()
+		e.stream.Connect()
+	}
+	return e.stream
+}
+
+// attachStreams - TriggerOnTrade 전략은 체결가 스트림에, OrderBook 전략은 호가 스트림에 붙이고, 브로커가 주문 통보를 제공하면 구독한다.
+// 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다.
 func (e *StrategyEngine) attachStreams() {
+	brokerID := e.Broker.Capabilities().BrokerID
 	for _, strategy := range e.Strategies {
 		spec := strategy.Spec()
-		if spec.Trigger != TriggerOnTrade {
-			continue
+		if spec.Trigger == TriggerOnTrade {
+			if stream := e.streamFor(StreamTrades); stream == nil {
+				log.Printf("WARN hermetix [%s] Trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - PollInterval=%s 폴링으로 동작합니다",
+					spec.Name, brokerID, spec.pollInterval())
+			} else {
+				name := spec.Name
+				stream.SubscribeTrades(spec.Symbols, func(tick TradeTick) {
+					e.streamMu.Lock()
+					e.latestTrades[tick.Symbol] = tick
+					e.streamMu.Unlock()
+					e.requestTick(name)
+				})
+				log.Printf("INFO hermetix [%s] trade stream attached / symbols=%v minTickInterval=%s", spec.Name, spec.Symbols, spec.minTickInterval())
+			}
 		}
-		streaming, ok := e.Broker.(StreamingBrokerClient)
-		if !ok || !e.Broker.Capabilities().HasStream(StreamTrades) {
-			log.Printf("WARN hermetix [%s] Trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - PollInterval=%s 폴링으로 동작합니다",
-				spec.Name, e.Broker.Capabilities().BrokerID, spec.pollInterval())
-			continue
+		if spec.OrderBook {
+			if stream := e.streamFor(StreamOrderBook); stream == nil {
+				log.Printf("WARN hermetix [%s] OrderBook=true 이지만 브로커 '%s' 는 호가 스트림을 제공하지 않습니다 - 컨텍스트의 OrderBook 은 비어 있습니다", spec.Name, brokerID)
+			} else if err := stream.SubscribeOrderBook(spec.Symbols, func(tick OrderBookTick) {
+				e.streamMu.Lock()
+				e.latestBooks[tick.Symbol] = tick
+				e.streamMu.Unlock()
+			}); err != nil {
+				log.Printf("WARN hermetix [%s] 호가 스트림을 구독하지 못했습니다: %v", spec.Name, err)
+			} else {
+				log.Printf("INFO hermetix [%s] order book stream attached / symbols=%v", spec.Name, spec.Symbols)
+			}
 		}
-		e.streamMu.Lock()
-		stream := e.stream
-		if stream == nil {
-			stream = streaming.OpenStream()
-			e.stream = stream
-			stream.Connect()
-		}
-		e.streamMu.Unlock()
-		name := spec.Name
-		stream.SubscribeTrades(spec.Symbols, func(tick TradeTick) {
-			e.streamMu.Lock()
-			e.latestTrades[tick.Symbol] = tick
-			e.streamMu.Unlock()
-			e.requestTick(name)
-		})
-		log.Printf("INFO hermetix [%s] trade stream attached / symbols=%v minTickInterval=%s", spec.Name, spec.Symbols, spec.minTickInterval())
 	}
+	e.attachOrderEvents()
+}
+
+// attachOrderEvents - 주문 통보를 구독해 어댑터 추적(OrderEventApplier)과 브라켓(BracketMonitor.OnOrderEvent)에 반영한다.
+// 브로커가 제공하면 항상 붙인다 — 구독 실패(KIS HTS ID 미설정 등)는 경고만 남기고 폴링 판정으로 둔다.
+func (e *StrategyEngine) attachOrderEvents() {
+	e.streamMu.Lock()
+	already := e.orderEventsOn
+	e.streamMu.Unlock()
+	if already {
+		return
+	}
+	stream := e.streamFor(StreamOrderEvents)
+	if stream == nil {
+		return
+	}
+	if err := stream.SubscribeOrderEvents(e.onOrderEvent); err != nil {
+		log.Printf("WARN hermetix 주문 통보 스트림을 구독하지 못했습니다 - 체결 판정은 폴링으로 계속합니다: %v", err)
+		return
+	}
+	e.streamMu.Lock()
+	e.orderEventsOn = true
+	e.streamMu.Unlock()
+	log.Printf("INFO hermetix order event stream attached")
+}
+
+func (e *StrategyEngine) onOrderEvent(event OrderEvent) {
+	side := ""
+	if event.Side != nil {
+		side = string(*event.Side)
+	}
+	log.Printf("INFO hermetix order event / %s order=%s %s %s qty=%v price=%v", event.Type, event.OrderID, event.Symbol, side, event.Quantity, event.Price)
+	if applier, ok := e.Broker.(OrderEventApplier); ok {
+		safeCall("engine", "applyOrderEvent "+event.OrderID, func() { applier.ApplyOrderEvent(event) })
+	}
+	safeCall("engine", "bracket onOrderEvent "+event.OrderID, func() { e.Brackets.OnOrderEvent(event) })
 }
 
 // requestTick - 스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 스트림 고루틴에서 호출되므로 신호만 보내고 돌아온다.
@@ -780,9 +866,20 @@ func (e *StrategyEngine) buildContext(strategy Strategy) (*StrategyContext, erro
 			openOrders = append(openOrders, o)
 		}
 	}
+	books := map[string]OrderBookTick{}
+	if spec.OrderBook {
+		e.streamMu.Lock()
+		for _, symbol := range spec.Symbols {
+			if book, ok := e.latestBooks[symbol]; ok {
+				books[symbol] = book
+			}
+		}
+		e.streamMu.Unlock()
+	}
 	return &StrategyContext{
 		Now: time.Now(), Quotes: quoteMap, Candles: candles,
 		Account: account, Holdings: holdingMap, OpenOrders: openOrders, BuyingPower: power,
+		OrderBooks: books,
 	}, nil
 }
 

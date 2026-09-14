@@ -15,10 +15,10 @@ import { KisMarketStream } from "./kisStream.js";
 import { AuthError, BrokerApiError, MarketClosedError, RateLimitError } from "../errors.js";
 import type {
   Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-  Fill, Holding, MarketDay, Order, Quote,
+  Fill, Holding, MarketDay, Order, OrderEvent, Quote,
   TradingEnvironment,
 } from "../models.js";
-import { symbolCodeFor } from "../models.js";
+import { orderIdMatches, symbolCodeFor } from "../models.js";
 import { isOpenStatus } from "../models.js";
 
 interface Tracked { order: Order; baselineQty: Decimal; day: string; }
@@ -34,7 +34,8 @@ export class KisClient implements StreamingBrokerClient {
     fractionalShares: false,
     serverOpenOrders: false, // 모의 서버가 주문 조회 미제공 - 어댑터 내부 추적
     environments: new Set<TradingEnvironment>(["PAPER", "LIVE"]),
-    streams: new Set(["TRADES"]), // H0STCNT0 체결가 — 2026-09 모의 실측
+    // H0STCNT0 체결가·H0STASP0 호가 — 2026-09 모의 실측. H0STCNI9 주문 통보 — 문서 기반 (HTS ID 필요)
+    streams: new Set(["TRADES", "ORDER_BOOK", "ORDER_EVENTS"]),
   };
 
   private token: string | null = null;
@@ -54,6 +55,7 @@ export class KisClient implements StreamingBrokerClient {
    * baseUrl 을 비우면 환경에 따라 결정(모의 openapivts:29443 / 실전 openapi:9443).
    * throttleMs 0 이면 자동 — 모의 600(초당 2건), 실전 100(초당 20건 한도의 절반). 계좌 TR ID 는 모의 V / 실전 T 프리픽스.
    * wsUrl 을 비우면 환경에 따라 결정(모의 ws://ops…:31000 / 실전 :21000).
+   * htsId 는 실시간 주문 통보(H0STCNI9/H0STCNI0) 구독 키 — 비우면 주문 통보 스트림을 쓰지 않는다.
    */
   constructor(
     private readonly appkey: string,
@@ -64,6 +66,7 @@ export class KisClient implements StreamingBrokerClient {
     throttleMs = 0,
     readonly environment: TradingEnvironment = "PAPER",
     wsUrl: string = "",
+    readonly htsId: string = "",
   ) {
     const live = environment === "LIVE";
     this.baseUrl = baseUrl || (live ? KisClient.LIVE_URL : KisClient.PAPER_URL);
@@ -217,7 +220,46 @@ export class KisClient implements StreamingBrokerClient {
   // ---------------------------------------------------------------- stream
 
   openStream(): MarketStream {
-    return new KisMarketStream({ wsUrl: this.wsUrl, custtype: "P", approvalKey: () => this.approvalKey() });
+    return new KisMarketStream({
+      wsUrl: this.wsUrl, custtype: "P", approvalKey: () => this.approvalKey(),
+      htsId: this.htsId, live: this.environment === "LIVE",
+    });
+  }
+
+  /**
+   * 주문 통보를 메모리 추적에 반영한다 — 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던 체결 판정을
+   * 통보가 오면 즉시 확정한다. 통보 주문번호는 10자리 0 패딩이라 orderIdMatches 로 맞춘다.
+   */
+  applyOrderEvent(event: OrderEvent): void {
+    const entry = [...this.tracked.entries()].find(([id]) => orderIdMatches(event.orderId, id));
+    if (!entry) return;
+    const [id, tracked] = entry;
+    const order = tracked.order;
+    let updated: Order;
+    switch (event.type) {
+      case "FILLED": {
+        const filled = (order.filledQuantity ?? new Decimal(0)).plus(event.quantity ?? 0);
+        const total = order.quantity ?? filled;
+        const done = filled.gte(total);
+        updated = {
+          ...order,
+          filledQuantity: filled,
+          avgFillPrice: event.price ?? order.avgFillPrice ?? null,
+          status: done ? "FILLED" : "PARTIALLY_FILLED",
+        };
+        break;
+      }
+      case "CANCELED":
+        updated = { ...order, status: "CANCELED", canceledAt: event.timestamp };
+        break;
+      case "REJECTED":
+        updated = { ...order, status: "REJECTED" };
+        break;
+      default:
+        return; // ACCEPTED / MODIFIED — 상태 변화 없음
+    }
+    this.tracked.set(id, { ...tracked, order: updated });
+    console.log(`INFO hermetix KIS order event applied / ${id} ${event.type} -> ${updated.status}`);
   }
 
   /**

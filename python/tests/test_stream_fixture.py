@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from hermetix.brokers.kis_stream import parse_kis_frame
-from hermetix.brokers.kiwoom_stream import parse_kiwoom_real
+from hermetix.brokers.kis_stream import parse_kis_frame, parse_kis_order_book, parse_kis_order_events
+from hermetix.brokers.kiwoom_stream import parse_kiwoom_order_book, parse_kiwoom_order_events, parse_kiwoom_real
 
 FIXTURES = Path(__file__).resolve().parents[2] / "conformance" / "fixtures"
 KST = ZoneInfo("Asia/Seoul")
@@ -76,3 +76,79 @@ def test_kiwoom_parser_skips_other_types_and_strips_prefix():
     assert [t.symbol for t in ticks] == ["005930"]
     assert ticks[0].price == Decimal(71500) and ticks[0].quantity == Decimal(15)
     assert ticks[0].ask_price == Decimal(71500) and ticks[0].bid_price == Decimal(71400)
+
+
+# ------------------------------------------------------------------ 2차 채널: 호가 (실측) · 주문 통보 (문서 기반)
+
+def assert_books(books, expected):
+    assert len(books) == len(expected)
+    for book, e in zip(books, expected):
+        assert book.symbol == e["symbol"]
+        assert book.timestamp.astimezone(KST).strftime("%H:%M:%S") == e["time"]
+        assert [(str(l.price), str(l.quantity)) for l in book.asks] == [(l["price"], l["quantity"]) for l in e["asks"]]
+        assert [(str(l.price), str(l.quantity)) for l in book.bids] == [(l["price"], l["quantity"]) for l in e["bids"]]
+        assert book.total_ask_quantity == Decimal(e["totalAskQuantity"])
+        assert book.total_bid_quantity == Decimal(e["totalBidQuantity"])
+
+
+def assert_events(events, expected):
+    assert len(events) == len(expected)
+    for ev, e in zip(events, expected):
+        assert ev.order_id == e["orderId"]
+        assert ev.type.name == e["type"]
+        assert ev.timestamp.astimezone(KST).strftime("%H:%M:%S") == e["time"]
+        assert ev.symbol == e["symbol"]
+        assert ev.side.name == e["side"]
+        assert ev.quantity == Decimal(e["quantity"])
+        assert ev.price == Decimal(e["price"])
+        if "remainingQuantity" in e:
+            assert ev.remaining_quantity == Decimal(e["remainingQuantity"])
+        assert ev.original_order_id == e.get("originalOrderId")
+
+
+def test_kis_h0stasp0_order_book_frames_measured():
+    section = stream_section("kis")["orderBook"]
+    assert section["channel"] == "ORDER_BOOK"
+    assert_books([b for f in section["frames"] for b in parse_kis_order_book(f, TODAY)], section["expected"])
+
+
+def test_kis_h0stcni9_order_event_frames_document_based():
+    section = stream_section("kis")["orderEvents"]
+    assert section["measured"] is False
+    assert_events([e for f in section["frames"] for e in parse_kis_order_events(f, TODAY)], section["expected"])
+
+
+def test_kiwoom_0d_order_book_frames_measured():
+    section = stream_section("kiwoom")["orderBook"]
+    assert_books([b for f in section["frames"] for b in parse_kiwoom_order_book(json.loads(f), TODAY)], section["expected"])
+
+
+def test_kiwoom_00_order_event_frames_document_based():
+    section = stream_section("kiwoom")["orderEvents"]
+    assert section["measured"] is False
+    assert_events([e for f in section["frames"] for e in parse_kiwoom_order_events(json.loads(f), TODAY)], section["expected"])
+
+
+def test_kis_order_event_parser_cancel_reject_and_wrong_tr():
+    canceled = "U^A^0000000002^0000000001^01^2^00^0^005930^0^0^105530^0^1^2^00950^3^N^0^^N^^^^S^0"
+    rejected = "U^A^0000000003^0000000000^02^0^00^0^005930^0^0^105530^1^1^1^00950^3^N^0^^N^^^^S^0"
+    c = parse_kis_order_events(f"0|H0STCNI9|001|{canceled}", TODAY)[0]
+    assert c.type.name == "CANCELED" and c.side.name == "SELL" and c.original_order_id == "0000000001"
+    r = parse_kis_order_events(f"0|H0STCNI0|001|{rejected}", TODAY)[0]
+    assert r.type.name == "REJECTED"
+    assert parse_kis_order_events(f"0|H0STCNT0|001|{canceled}", TODAY) == []
+    assert c.order_id_matches("2") and not c.order_id_matches("3")
+
+
+def test_kiwoom_order_event_parser_accept_cancel_modify_reject():
+    def frame(status, kind, filled="0", reason=""):
+        return {"trnm": "REAL", "data": [{"type": "00", "name": "주문체결", "item": "A005930", "values": {
+            "9203": "0000012346", "904": "0000000000", "9001": "A005930", "913": status, "905": kind, "907": "2",
+            "900": "1", "901": "+240000", "902": "1", "910": "", "911": filled, "908": "105530", "919": reason}}]}
+    accepted = parse_kiwoom_order_events(frame("접수", "+매수"), TODAY)[0]
+    assert accepted.type.name == "ACCEPTED" and accepted.quantity == 1 and accepted.price == 240000
+    assert accepted.original_order_id is None
+    assert parse_kiwoom_order_events(frame("확인", "매수취소"), TODAY)[0].type.name == "CANCELED"
+    assert parse_kiwoom_order_events(frame("확인", "매수정정"), TODAY)[0].type.name == "MODIFIED"
+    rejected = parse_kiwoom_order_events(frame("거부", "+매수", reason="주문가능금액 부족"), TODAY)[0]
+    assert rejected.type.name == "REJECTED" and rejected.reason == "주문가능금액 부족"

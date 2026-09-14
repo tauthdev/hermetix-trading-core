@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from .models import (
     TradingEnvironment,
     Account, BrokerCapabilities, Candle, CandleInterval, CreateOrderRequest,
-    Fill, Holding, MarketDay, Order, Quote, SessionHours, TradeTick,
+    Fill, Holding, MarketDay, Order, OrderBookTick, OrderEvent, Quote, SessionHours, TradeTick,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -74,13 +74,16 @@ class BrokerClient(ABC):
 
 
 TradeListener = Callable[[TradeTick], None]
+OrderBookListener = Callable[[OrderBookTick], None]
+OrderEventListener = Callable[[OrderEvent], None]
 
 
 class MarketStream(ABC):
     """실시간 시장 데이터 스트림. 규약:
 
     - connect() 후 연결이 끊기면 스스로 지수 백오프로 재연결하고, 재연결 시 기존 구독을 다시 보낸다
-    - subscribe_trades() 는 연결 전에 불러도 된다 - 연결되는 순간 전송된다
+    - subscribe_* 는 연결 전에 불러도 된다 - 연결되는 순간 전송된다
+    - 선언하지 않은 채널(BrokerCapabilities.streams)의 subscribe 는 NotImplementedError
     - 리스너는 스트림 스레드에서 호출된다. 오래 걸리는 일은 리스너 안에서 하지 말 것 (엔진은 루프로 넘긴다)
     - 리스너가 던진 예외는 스트림이 삼키고 로그만 남긴다
     - close() 뒤에는 재연결하지 않는다
@@ -97,6 +100,13 @@ class MarketStream(ABC):
     @abstractmethod
     def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None: ...
 
+    def subscribe_order_book(self, symbols: list[str], listener: OrderBookListener) -> None:
+        raise NotImplementedError("이 브로커는 호가 스트림을 제공하지 않습니다")
+
+    def subscribe_order_events(self, listener: OrderEventListener) -> None:
+        """계좌 전체의 주문 통보 - 심볼 지정 없음"""
+        raise NotImplementedError("이 브로커는 주문 통보 스트림을 제공하지 않습니다")
+
     @abstractmethod
     def close(self) -> None: ...
 
@@ -108,6 +118,10 @@ class StreamingBrokerClient(BrokerClient):
     @abstractmethod
     def open_stream(self) -> MarketStream:
         """새 스트림 인스턴스를 만든다. 연결은 호출자가 MarketStream.connect() 로 시작한다"""
+
+    def apply_order_event(self, event: OrderEvent) -> None:
+        """엔진이 받은 주문 통보를 어댑터에 전달한다. 서버 주문 조회가 없어 메모리로 추적하는 어댑터(KIS 모의)는
+        여기서 체결·취소를 반영해 get_order 가 즉시 맞는 상태를 돌려주게 한다. 기본은 아무것도 안 한다"""
 
 
 class _Http:

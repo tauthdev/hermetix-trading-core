@@ -11,10 +11,47 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type streamFixture struct {
+type bookFixtureLevel struct {
+	Price    string `json:"price"`
+	Quantity string `json:"quantity"`
+}
+
+type bookFixture struct {
 	Channel  string   `json:"channel"`
 	Frames   []string `json:"frames"`
 	Expected []struct {
+		Symbol           string             `json:"symbol"`
+		Time             string             `json:"time"`
+		Asks             []bookFixtureLevel `json:"asks"`
+		Bids             []bookFixtureLevel `json:"bids"`
+		TotalAskQuantity string             `json:"totalAskQuantity"`
+		TotalBidQuantity string             `json:"totalBidQuantity"`
+	} `json:"expected"`
+}
+
+type orderEventFixture struct {
+	Channel  string   `json:"channel"`
+	Measured bool     `json:"measured"`
+	Frames   []string `json:"frames"`
+	Expected []struct {
+		OrderID           string `json:"orderId"`
+		Type              string `json:"type"`
+		Time              string `json:"time"`
+		Symbol            string `json:"symbol"`
+		Side              string `json:"side"`
+		Quantity          string `json:"quantity"`
+		Price             string `json:"price"`
+		RemainingQuantity string `json:"remainingQuantity"`
+		OriginalOrderID   string `json:"originalOrderId"`
+	} `json:"expected"`
+}
+
+type streamFixture struct {
+	Channel     string             `json:"channel"`
+	Frames      []string           `json:"frames"`
+	OrderBook   *bookFixture       `json:"orderBook"`
+	OrderEvents *orderEventFixture `json:"orderEvents"`
+	Expected    []struct {
 		Symbol           string `json:"symbol"`
 		Price            string `json:"price"`
 		Quantity         string `json:"quantity"`
@@ -139,4 +176,109 @@ func TestKiwoomRealIgnoresOtherTypes(t *testing.T) {
 	assertDecimalEqual(t, "price", &ticks[0].Price, "71500")
 	assertDecimalEqual(t, "quantity", &ticks[0].Quantity, "15")
 	assertDecimalEqual(t, "bidPrice", ticks[0].BidPrice, "71400")
+}
+
+func assertBooks(t *testing.T, books []OrderBookTick, fx *bookFixture) {
+	t.Helper()
+	if fx == nil {
+		t.Fatal("픽스처에 orderBook 섹션이 없다")
+	}
+	if fx.Channel != string(StreamOrderBook) {
+		t.Fatalf("channel = %s", fx.Channel)
+	}
+	if len(books) != len(fx.Expected) {
+		t.Fatalf("books = %d, expected %d", len(books), len(fx.Expected))
+	}
+	for i, e := range fx.Expected {
+		book := books[i]
+		if book.Symbol != e.Symbol {
+			t.Fatalf("[%d] symbol = %s", i, book.Symbol)
+		}
+		if got := book.Timestamp.In(kst).Format("15:04:05"); got != e.Time {
+			t.Fatalf("[%d] time = %s, expected %s", i, got, e.Time)
+		}
+		check := func(label string, levels []OrderBookLevel, expected []bookFixtureLevel) {
+			if len(levels) != len(expected) {
+				t.Fatalf("[%d] %s = %d levels, expected %d", i, label, len(levels), len(expected))
+			}
+			for j := range levels {
+				if levels[j].Price.String() != expected[j].Price || levels[j].Quantity.String() != expected[j].Quantity {
+					t.Fatalf("[%d] %s[%d] = %s x%s, expected %s x%s", i, label, j, levels[j].Price, levels[j].Quantity, expected[j].Price, expected[j].Quantity)
+				}
+			}
+		}
+		check("asks", book.Asks, e.Asks)
+		check("bids", book.Bids, e.Bids)
+		assertDecimalEqual(t, "totalAskQuantity", book.TotalAskQuantity, e.TotalAskQuantity)
+		assertDecimalEqual(t, "totalBidQuantity", book.TotalBidQuantity, e.TotalBidQuantity)
+	}
+}
+
+func assertOrderEvents(t *testing.T, events []OrderEvent, fx *orderEventFixture) {
+	t.Helper()
+	if fx == nil {
+		t.Fatal("픽스처에 orderEvents 섹션이 없다")
+	}
+	if fx.Measured {
+		t.Fatal("orderEvents 는 아직 문서 기반(measured=false)이어야 한다 — 실측했다면 이 검사를 갱신")
+	}
+	if len(events) != len(fx.Expected) {
+		t.Fatalf("events = %d, expected %d", len(events), len(fx.Expected))
+	}
+	for i, e := range fx.Expected {
+		ev := events[i]
+		if ev.OrderID != e.OrderID || string(ev.Type) != e.Type || ev.Symbol != e.Symbol {
+			t.Fatalf("[%d] event = %+v, expected %+v", i, ev, e)
+		}
+		if got := ev.Timestamp.In(kst).Format("15:04:05"); got != e.Time {
+			t.Fatalf("[%d] time = %s, expected %s", i, got, e.Time)
+		}
+		if ev.Side == nil || string(*ev.Side) != e.Side {
+			t.Fatalf("[%d] side = %v, expected %s", i, ev.Side, e.Side)
+		}
+		assertDecimalEqual(t, "quantity", ev.Quantity, e.Quantity)
+		assertDecimalEqual(t, "price", ev.Price, e.Price)
+		if e.RemainingQuantity != "" {
+			assertDecimalEqual(t, "remainingQuantity", ev.RemainingQuantity, e.RemainingQuantity)
+		}
+		if ev.OriginalOrderID != e.OriginalOrderID {
+			t.Fatalf("[%d] originalOrderId = %q, expected %q", i, ev.OriginalOrderID, e.OriginalOrderID)
+		}
+	}
+}
+
+func TestKisOrderBookFixture(t *testing.T) {
+	fx := loadStreamFixture(t, "kis")
+	books := make([]OrderBookTick, 0)
+	for _, frame := range fx.OrderBook.Frames {
+		books = append(books, ParseKisOrderBook(frame, fixtureToday)...)
+	}
+	assertBooks(t, books, fx.OrderBook)
+}
+
+func TestKisOrderEventsFixture(t *testing.T) {
+	fx := loadStreamFixture(t, "kis")
+	events := make([]OrderEvent, 0)
+	for _, frame := range fx.OrderEvents.Frames {
+		events = append(events, ParseKisOrderEvents(frame, fixtureToday)...)
+	}
+	assertOrderEvents(t, events, fx.OrderEvents)
+}
+
+func TestKiwoomOrderBookFixture(t *testing.T) {
+	fx := loadStreamFixture(t, "kiwoom")
+	books := make([]OrderBookTick, 0)
+	for _, frame := range fx.OrderBook.Frames {
+		books = append(books, ParseKiwoomOrderBook([]byte(frame), fixtureToday)...)
+	}
+	assertBooks(t, books, fx.OrderBook)
+}
+
+func TestKiwoomOrderEventsFixture(t *testing.T) {
+	fx := loadStreamFixture(t, "kiwoom")
+	events := make([]OrderEvent, 0)
+	for _, frame := range fx.OrderEvents.Frames {
+		events = append(events, ParseKiwoomOrderEvents([]byte(frame), fixtureToday)...)
+	}
+	assertOrderEvents(t, events, fx.OrderEvents)
 }

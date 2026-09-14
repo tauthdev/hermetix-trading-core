@@ -3,8 +3,8 @@ import { Decimal } from "decimal.js";
 import type { BrokerClient, MarketStream } from "./broker.js";
 import { isStreamingBrokerClient, sleep } from "./broker.js";
 import { InsufficientFundsError, MarketClosedError, RateLimitError } from "./errors.js";
-import type { Holding, MarketDay, Order, Quote, TradeTick, TradingEnvironment } from "./models.js";
-import { isOpenStatus, tradeTickToQuote } from "./models.js";
+import type { Holding, MarketDay, Order, OrderBookTick, OrderEvent, Quote, StreamChannel, TradeTick, TradingEnvironment } from "./models.js";
+import { isOpenStatus, orderIdMatches, tradeTickToQuote } from "./models.js";
 import type { Buy, Sell, Signal, Strategy } from "./strategy.js";
 import { StrategyContext } from "./strategy.js";
 
@@ -139,6 +139,8 @@ interface Bracket {
   takeProfit: Decimal | null;
   stopLoss: Decimal | null;
   active: boolean;
+  /** 주문 통보로 누적된 체결 수량 */
+  filledQuantity: Decimal;
 }
 
 /** 소프트웨어 익절/손절. 상태는 메모리에만 (재시작 시 소실). */
@@ -150,7 +152,7 @@ export class BracketMonitor {
   register(entryOrderId: string, symbol: string, quantity: Decimal,
            takeProfit: Decimal | null, stopLoss: Decimal | null): void {
     if (!takeProfit && !stopLoss) return;
-    this.brackets.set(entryOrderId, { entryOrderId, symbol, quantity, takeProfit, stopLoss, active: false });
+    this.brackets.set(entryOrderId, { entryOrderId, symbol, quantity, takeProfit, stopLoss, active: false, filledQuantity: new Decimal(0) });
     log.info(`bracket registered / ${entryOrderId} ${symbol} qty=${quantity} tp=${takeProfit} sl=${stopLoss}`);
   }
 
@@ -201,6 +203,31 @@ export class BracketMonitor {
       return null;
     }
     return bracket;
+  }
+
+  /**
+   * 주문 통보로 진입 주문 상태를 바로 반영한다 (서버 조회 없이). 체결은 누적해 주문 수량을 채우면 활성화,
+   * 취소·거부는 폐기. 통보가 없는 브로커에서는 기존처럼 틱마다 resolveEntry 가 조회한다.
+   */
+  onOrderEvent(event: OrderEvent): void {
+    const bracket = [...this.brackets.values()].find((b) => orderIdMatches(event.orderId, b.entryOrderId));
+    if (!bracket) return;
+    switch (event.type) {
+      case "FILLED": {
+        const filled = bracket.filledQuantity.plus(event.quantity ?? 0);
+        const active = bracket.active || filled.gte(bracket.quantity);
+        this.brackets.set(bracket.entryOrderId, { ...bracket, filledQuantity: filled, active });
+        if (active && !bracket.active) log.info(`bracket activated / entry filled by event ${bracket.entryOrderId}`);
+        break;
+      }
+      case "CANCELED":
+      case "REJECTED":
+        this.brackets.delete(bracket.entryOrderId);
+        log.info(`bracket dropped / entry ${event.type} by event ${bracket.entryOrderId}`);
+        break;
+      default:
+        break; // ACCEPTED / MODIFIED
+    }
   }
 
   get activeCount(): number { return this.brackets.size; }
@@ -302,6 +329,8 @@ export interface EngineOptions {
  * 실시간 트리거(trigger: "ON_TRADE"): 브로커가 StreamingBrokerClient 이고 TRADES 채널을 선언하면 전략 심볼의 체결가 스트림을 구독하고,
  * 틱마다 tick 을 단일 실행 큐에 넣는다. 대기 중인 틱이 있으면 합치고, 직전 tick 종료 후 minTickIntervalMs 가 지나야 다음을 돌린다.
  * 스트림 틱이 모든 심볼을 덮으면 quotes REST 호출 대신 마지막 틱을 현재가로 쓴다. 폴링은 안전망으로 계속 돈다.
+ * 호가(spec.orderBook): 심볼 호가창을 구독해 ctx.orderBook(symbol) 로 공급한다 — 틱을 촉발하지는 않는다.
+ * 주문 통보: 브로커가 ORDER_EVENTS 를 선언하면 자동 구독해 어댑터(applyOrderEvent)와 브라켓(onOrderEvent)에 반영한다.
  */
 export class StrategyEngine {
   readonly guard: TradingGuard;
@@ -316,6 +345,9 @@ export class StrategyEngine {
   private streamsAttached = false;
   /** 심볼(요청 표기) → 마지막 체결 틱 */
   private readonly latestTrades = new Map<string, TradeTick>();
+  /** 심볼(요청 표기) → 마지막 호가창 (spec.orderBook 전략만) */
+  private readonly latestOrderBooks = new Map<string, OrderBookTick>();
+  private orderEventsAttached = false;
   /** 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용) */
   private readonly pendingTicks = new Set<string>();
   /** 전략 이름 → 직전 tick 종료 시각 (epoch ms) */
@@ -385,29 +417,75 @@ export class StrategyEngine {
     try { this.stream?.close(); } catch { /* 무시 */ }
   }
 
-  /** ON_TRADE 전략을 체결가 스트림에 붙인다 (한 번만). 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다 */
+  /** 브로커가 채널을 제공하면 공유 스트림을 (필요 시 열어) 돌려주고, 아니면 null */
+  private streamFor(channel: StreamChannel): MarketStream | null {
+    const broker = this.broker;
+    if (!isStreamingBrokerClient(broker) || !broker.capabilities.streams?.has(channel)) return null;
+    if (!this.stream) {
+      this.stream = broker.openStream();
+      this.stream.connect();
+    }
+    return this.stream;
+  }
+
+  /** ON_TRADE·orderBook 전략을 스트림에 붙이고 주문 통보를 구독한다 (한 번만). 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다 */
   attachStreams(): void {
     if (this.streamsAttached) return;
     this.streamsAttached = true;
     for (const strategy of this.strategies) {
       const spec = strategy.spec;
-      if (spec.trigger !== "ON_TRADE") continue;
-      const broker = this.broker;
-      if (!isStreamingBrokerClient(broker) || !broker.capabilities.streams?.has("TRADES")) {
-        log.warn(`[${spec.name}] trigger=ON_TRADE 이지만 브로커 '${broker.capabilities.brokerId}' 는 체결가 스트림을 제공하지 않습니다 - ` +
-          `pollIntervalSeconds=${spec.pollIntervalSeconds ?? 60} 폴링으로 동작합니다`);
-        continue;
+      if (spec.trigger === "ON_TRADE") {
+        const s = this.streamFor("TRADES");
+        if (!s) {
+          log.warn(`[${spec.name}] trigger=ON_TRADE 이지만 브로커 '${this.broker.capabilities.brokerId}' 는 체결가 스트림을 제공하지 않습니다 - ` +
+            `pollIntervalSeconds=${spec.pollIntervalSeconds ?? 60} 폴링으로 동작합니다`);
+        } else {
+          s.subscribeTrades(spec.symbols, (tick) => {
+            this.latestTrades.set(tick.symbol, tick);
+            this.requestTick(strategy);
+          });
+          log.info(`[${spec.name}] trade stream attached / symbols=${spec.symbols.join(",")} minTickIntervalMs=${spec.minTickIntervalMs ?? 1000}`);
+        }
       }
-      if (!this.stream) {
-        this.stream = broker.openStream();
-        this.stream.connect();
+      if (spec.orderBook) {
+        const s = this.streamFor("ORDER_BOOK");
+        if (!s) {
+          log.warn(`[${spec.name}] orderBook=true 이지만 브로커 '${this.broker.capabilities.brokerId}' 는 호가 스트림을 제공하지 않습니다 - 컨텍스트의 orderBook 은 비어 있습니다`);
+        } else {
+          s.subscribeOrderBook(spec.symbols, (tick) => { this.latestOrderBooks.set(tick.symbol, tick); });
+          log.info(`[${spec.name}] order book stream attached / symbols=${spec.symbols.join(",")}`);
+        }
       }
-      this.stream.subscribeTrades(spec.symbols, (tick) => {
-        this.latestTrades.set(tick.symbol, tick);
-        this.requestTick(strategy);
-      });
-      log.info(`[${spec.name}] trade stream attached / symbols=${spec.symbols.join(",")} minTickIntervalMs=${spec.minTickIntervalMs ?? 1000}`);
     }
+    this.attachOrderEvents();
+  }
+
+  /**
+   * 주문 통보를 구독해 어댑터 추적(applyOrderEvent)과 브라켓(onOrderEvent)에 반영한다.
+   * 브로커가 제공하면 항상 붙인다 — 구독 실패(KIS HTS ID 미설정 등)는 경고만 남기고 폴링 판정으로 둔다
+   */
+  private attachOrderEvents(): void {
+    if (this.orderEventsAttached) return;
+    const broker = this.broker;
+    if (!isStreamingBrokerClient(broker)) return;
+    const s = this.streamFor("ORDER_EVENTS");
+    if (!s) return;
+    try {
+      s.subscribeOrderEvents((event) => this.onOrderEvent(event));
+      this.orderEventsAttached = true;
+      log.info("order event stream attached");
+    } catch (e) {
+      log.warn(`주문 통보 스트림을 구독하지 못했습니다 - 체결 판정은 폴링으로 계속합니다: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  private onOrderEvent(event: OrderEvent): void {
+    log.info(`order event / ${event.type} order=${event.orderId} ${event.symbol ?? ""} ${event.side ?? ""} qty=${event.quantity} price=${event.price}`);
+    const broker = this.broker;
+    if (isStreamingBrokerClient(broker)) {
+      try { broker.applyOrderEvent?.(event); } catch (e) { log.warn(`applyOrderEvent 실패 / ${event.orderId}: ${e}`); }
+    }
+    try { this.brackets.onOrderEvent(event); } catch (e) { log.warn(`bracket onOrderEvent 실패 / ${event.orderId}: ${e}`); }
   }
 
   /**
@@ -505,7 +583,19 @@ export class StrategyEngine {
       new Map((await this.broker.getHoldings()).map((h) => [h.symbol, h])),
       (await this.broker.getOrders()).filter((o) => isOpenStatus(o.status)),
       await this.broker.getBuyingPower(),
+      this.orderBooksFor(spec),
     );
+  }
+
+  /** spec.orderBook 전략의 심볼 중 스트림이 한 번이라도 준 호가창 */
+  private orderBooksFor(spec: Strategy["spec"]): Map<string, OrderBookTick> {
+    const books = new Map<string, OrderBookTick>();
+    if (!spec.orderBook) return books;
+    for (const symbol of spec.symbols) {
+      const book = this.latestOrderBooks.get(symbol);
+      if (book) books.set(symbol, book);
+    }
+    return books;
   }
 }
 

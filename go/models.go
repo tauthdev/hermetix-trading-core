@@ -6,6 +6,7 @@ package hermetix
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -180,8 +181,88 @@ type Fill struct {
 // StreamChannel - 브로커가 제공하는 실시간 스트림 채널. BrokerCapabilities.Streams 로 선언한다.
 type StreamChannel string
 
-// StreamTrades - 체결가 스트림. 체결이 일어날 때마다 TradeTick 을 밀어준다.
-const StreamTrades StreamChannel = "TRADES"
+const (
+	// StreamTrades - 체결가 스트림. 체결이 일어날 때마다 TradeTick 을 밀어준다.
+	StreamTrades StreamChannel = "TRADES"
+	// StreamOrderBook - 호가 스트림. 호가창이 바뀔 때마다 OrderBookTick (10단계).
+	StreamOrderBook StreamChannel = "ORDER_BOOK"
+	// StreamOrderEvents - 내 주문의 접수·체결·취소·거부 통보 (OrderEvent).
+	StreamOrderEvents StreamChannel = "ORDER_EVENTS"
+)
+
+// OrderBookLevel - 호가 한 단계.
+type OrderBookLevel struct {
+	Price    decimal.Decimal
+	Quantity decimal.Decimal
+}
+
+// OrderBookTick - 호가창 스냅샷. Asks/Bids 는 최우선(1호가)부터 순서대로, 브로커가 주는 만큼(보통 10단계). 심볼은 구독 요청 표기 그대로.
+type OrderBookTick struct {
+	Symbol           string
+	Timestamp        time.Time
+	Asks             []OrderBookLevel
+	Bids             []OrderBookLevel
+	TotalAskQuantity *decimal.Decimal
+	TotalBidQuantity *decimal.Decimal
+}
+
+// BestAsk - 최우선 매도호가 (없으면 false).
+func (t OrderBookTick) BestAsk() (OrderBookLevel, bool) {
+	if len(t.Asks) == 0 {
+		return OrderBookLevel{}, false
+	}
+	return t.Asks[0], true
+}
+
+// BestBid - 최우선 매수호가 (없으면 false).
+func (t OrderBookTick) BestBid() (OrderBookLevel, bool) {
+	if len(t.Bids) == 0 {
+		return OrderBookLevel{}, false
+	}
+	return t.Bids[0], true
+}
+
+// OrderEventType - 주문 통보 종류.
+type OrderEventType string
+
+const (
+	OrderAccepted OrderEventType = "ACCEPTED" // 주문 접수
+	OrderFilled   OrderEventType = "FILLED"   // 체결 (부분 체결 포함 — OrderEvent.Quantity 가 이번 체결량)
+	OrderCanceled OrderEventType = "CANCELED" // 취소 확인
+	OrderModified OrderEventType = "MODIFIED" // 정정 확인
+	OrderRejected OrderEventType = "REJECTED" // 거부
+)
+
+// OrderEvent - 내 주문 통보 1건.
+//   - OrderID 는 브로커 주문번호. 브로커에 따라 REST 응답과 자릿수(0 패딩)가 다를 수 있어 비교는 OrderIDMatches 로 한다
+//   - Quantity/Price 는 이벤트 종류에 따라 체결량·체결가(FILLED) 또는 주문량·주문가(그 외)
+//   - RemainingQuantity 는 브로커가 주는 경우만 (키움 902). KIS 통보에는 없다
+type OrderEvent struct {
+	OrderID           string
+	Type              OrderEventType
+	Timestamp         time.Time
+	Symbol            string
+	Side              *OrderSide
+	Quantity          *decimal.Decimal
+	Price             *decimal.Decimal
+	RemainingQuantity *decimal.Decimal
+	OriginalOrderID   string
+	Reason            string
+}
+
+// NormalizeOrderID - 앞자리 0 패딩을 무시한 주문번호 (KIS 통보 10자리 vs REST ODNO 7자리 등).
+func NormalizeOrderID(id string) string {
+	normalized := strings.TrimLeft(strings.TrimSpace(id), "0")
+	if normalized == "" {
+		return "0"
+	}
+	return normalized
+}
+
+// OrderIDMatches - 0 패딩 차이를 무시한 주문번호 비교.
+func (e OrderEvent) OrderIDMatches(other string) bool {
+	return NormalizeOrderID(e.OrderID) == NormalizeOrderID(other)
+}
 
 // TradeTick - 체결 1건. 브로커 프레임을 공통 모델로 정규화한 것.
 //   - Symbol 은 구독 요청 표기 그대로 돌려준다 (KRX:005930 으로 구독하면 KRX:005930)

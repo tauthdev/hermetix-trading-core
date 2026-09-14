@@ -3,6 +3,7 @@ package hermetix
 // ON_TRADE 트리거 — 스트림 틱이 tick 을 촉발하고, 합쳐지고, 최소 간격을 지키고, 현재가를 REST 대신 틱에서 가져오는지.
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,7 +19,13 @@ type fakeStream struct {
 		symbols  []string
 		listener TradeListener
 	}
-	closed bool
+	bookListeners []struct {
+		symbols  []string
+		listener OrderBookListener
+	}
+	orderListeners []OrderEventListener
+	orderEventsErr error // SubscribeOrderEvents 가 돌려줄 오류 (KIS HTS ID 미설정 흉내)
+	closed         bool
 }
 
 func (s *fakeStream) IsConnected() bool {
@@ -34,6 +41,56 @@ func (s *fakeStream) SubscribeTrades(symbols []string, listener TradeListener) {
 		listener TradeListener
 	}{symbols, listener})
 	s.mu.Unlock()
+}
+func (s *fakeStream) SubscribeOrderBook(symbols []string, listener OrderBookListener) error {
+	s.mu.Lock()
+	s.bookListeners = append(s.bookListeners, struct {
+		symbols  []string
+		listener OrderBookListener
+	}{symbols, listener})
+	s.mu.Unlock()
+	return nil
+}
+func (s *fakeStream) SubscribeOrderEvents(listener OrderEventListener) error {
+	if s.orderEventsErr != nil {
+		return s.orderEventsErr
+	}
+	s.mu.Lock()
+	s.orderListeners = append(s.orderListeners, listener)
+	s.mu.Unlock()
+	return nil
+}
+func (s *fakeStream) emitBook(symbol, ask, bid string) {
+	a, _ := decimal.NewFromString(ask)
+	b, _ := decimal.NewFromString(bid)
+	tick := OrderBookTick{Symbol: symbol, Timestamp: time.Now(),
+		Asks: []OrderBookLevel{{Price: a, Quantity: decimal.NewFromInt(10)}}, Bids: []OrderBookLevel{{Price: b, Quantity: decimal.NewFromInt(10)}}}
+	s.mu.Lock()
+	targets := append([]struct {
+		symbols  []string
+		listener OrderBookListener
+	}(nil), s.bookListeners...)
+	s.mu.Unlock()
+	for _, l := range targets {
+		for _, sym := range l.symbols {
+			if sym == symbol {
+				l.listener(tick)
+			}
+		}
+	}
+}
+func (s *fakeStream) emitOrderEvent(event OrderEvent) {
+	s.mu.Lock()
+	targets := append([]OrderEventListener(nil), s.orderListeners...)
+	s.mu.Unlock()
+	for _, l := range targets {
+		l(event)
+	}
+}
+func (s *fakeStream) orderListenerCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.orderListeners)
 }
 func (s *fakeStream) Close() error {
 	s.mu.Lock()
@@ -66,6 +123,19 @@ type streamingFakeBroker struct {
 	stream     *fakeStream
 	quoteCalls atomic.Int32
 	streams    []StreamChannel
+	appliedMu  sync.Mutex
+	applied    []OrderEvent
+}
+
+func (b *streamingFakeBroker) ApplyOrderEvent(event OrderEvent) {
+	b.appliedMu.Lock()
+	b.applied = append(b.applied, event)
+	b.appliedMu.Unlock()
+}
+func (b *streamingFakeBroker) appliedCount() int {
+	b.appliedMu.Lock()
+	defer b.appliedMu.Unlock()
+	return len(b.applied)
 }
 
 func (b *streamingFakeBroker) Capabilities() BrokerCapabilities {
@@ -244,5 +314,110 @@ func TestStopClosesStream(t *testing.T) {
 	<-done
 	if !broker.stream.closed {
 		t.Fatal("Stop 은 스트림을 닫아야 한다")
+	}
+}
+
+var allStreams = []StreamChannel{StreamTrades, StreamOrderBook, StreamOrderEvents}
+
+func TestOrderBookSpecSubscribesAndFillsContext(t *testing.T) {
+	broker := newStreamingBroker(allStreams)
+	spec := onTradeSpec([]string{"005930"}, 300*time.Millisecond)
+	spec.OrderBook = true
+	strategy := &recordingStrategy{spec: spec}
+	startEngine(t, NewStrategyEngine(broker, []Strategy{strategy}))
+	awaitCalls(t, strategy, 1, 3*time.Second)
+	if len(broker.stream.bookListeners) != 1 || broker.stream.bookListeners[0].symbols[0] != "005930" {
+		t.Fatalf("book listeners = %+v", broker.stream.bookListeners)
+	}
+	_, ctx := strategy.call(0)
+	if _, ok := ctx.OrderBook("005930"); ok {
+		t.Fatal("아직 호가가 없어야 한다")
+	}
+
+	broker.stream.emitBook("005930", "250500", "250000")
+	broker.stream.emit("005930", "250500")
+	awaitCalls(t, strategy, 2, 3*time.Second)
+	_, ctx = strategy.call(1)
+	book, ok := ctx.OrderBook("KRX:005930") // 접두 무시 조회
+	if !ok {
+		t.Fatal("호가창이 컨텍스트에 있어야 한다")
+	}
+	ask, _ := book.BestAsk()
+	bid, _ := book.BestBid()
+	if ask.Price.String() != "250500" || bid.Price.String() != "250000" {
+		t.Fatalf("book = %+v", book)
+	}
+}
+
+func TestOrderEventsReachApplierAndBrackets(t *testing.T) {
+	broker := newStreamingBroker(allStreams)
+	strategy := &recordingStrategy{spec: onTradeSpec([]string{"005930"}, 300*time.Millisecond)}
+	engine := NewStrategyEngine(broker, []Strategy{strategy})
+	startEngine(t, engine)
+	waitFor(t, func() bool { return broker.stream.orderListenerCount() == 1 }, 3*time.Second, "주문 통보 구독")
+
+	tp := decimal.NewFromInt(310)
+	engine.Brackets.Register("12345", "AAPL", decimal.NewFromInt(2), &tp, nil)
+	qty := decimal.NewFromInt(2)
+	event := OrderEvent{OrderID: "0000012345", Type: OrderFilled, Timestamp: time.Now(), Quantity: &qty}
+	broker.stream.emitOrderEvent(event)
+	if broker.appliedCount() != 1 || broker.applied[0].OrderID != "0000012345" {
+		t.Fatalf("applied = %+v", broker.applied)
+	}
+	// 브라켓이 통보로 활성화됐다면 GetOrder(Submitted) 조회 없이 익절 시그널이 나온다
+	ctx := testCtx("311", "2")
+	if signals := engine.Brackets.Check(ctx); len(signals) != 1 {
+		t.Fatalf("signals = %+v (통보로 활성화돼야 한다)", signals)
+	}
+}
+
+func TestOrderEventSubscribeErrorDoesNotStopEngine(t *testing.T) {
+	broker := newStreamingBroker(allStreams)
+	broker.stream.orderEventsErr = errors.New("HTS ID 필요")
+	strategy := &recordingStrategy{spec: onTradeSpec([]string{"005930"}, 300*time.Millisecond)}
+	engine := NewStrategyEngine(broker, []Strategy{strategy})
+	startEngine(t, engine)
+	awaitCalls(t, strategy, 1, 3*time.Second)
+	if broker.stream.orderListenerCount() != 0 {
+		t.Fatal("구독이 실패했으면 리스너가 없어야 한다")
+	}
+	broker.stream.emit("005930", "71500")
+	awaitCalls(t, strategy, 2, 3*time.Second) // 체결가 트리거는 계속 동작
+}
+
+func TestBracketOnOrderEvent(t *testing.T) {
+	broker := newFakeBroker()
+	monitor := NewBracketMonitor(broker)
+	tp := decimal.NewFromInt(310)
+	one := decimal.NewFromInt(1)
+	event := func(orderID string, kind OrderEventType, quantity *decimal.Decimal) OrderEvent {
+		return OrderEvent{OrderID: orderID, Type: kind, Timestamp: time.Now(), Quantity: quantity}
+	}
+
+	monitor.Register("ord_1", "AAPL", decimal.NewFromInt(2), &tp, nil)
+	monitor.OnOrderEvent(event("0000ord_1", OrderAccepted, nil))
+	monitor.OnOrderEvent(event("0000ord_1", OrderFilled, &one)) // 부분 체결 — 아직 비활성 (GetOrder 는 Submitted)
+	if signals := monitor.Check(testCtx("311", "2")); len(signals) != 0 {
+		t.Fatalf("부분 체결인데 시그널 = %+v", signals)
+	}
+	monitor.OnOrderEvent(event("0000ord_1", OrderFilled, &one)) // 누적 2 = 주문 수량 → 활성
+	if signals := monitor.Check(testCtx("311", "2")); len(signals) != 1 {
+		t.Fatalf("signals = %+v", signals)
+	}
+
+	monitor.Register("ord_2", "AAPL", decimal.NewFromInt(2), &tp, nil)
+	monitor.OnOrderEvent(event("ord_2", OrderCanceled, nil))
+	if monitor.ActiveCount() != 0 {
+		t.Fatal("취소 통보는 브라켓을 폐기한다")
+	}
+	monitor.Register("ord_3", "AAPL", decimal.NewFromInt(2), &tp, nil)
+	monitor.OnOrderEvent(event("ord_3", OrderRejected, nil))
+	if monitor.ActiveCount() != 0 {
+		t.Fatal("거부 통보는 브라켓을 폐기한다")
+	}
+	monitor.Register("ord_4", "AAPL", decimal.NewFromInt(2), &tp, nil)
+	monitor.OnOrderEvent(event("other", OrderCanceled, nil)) // 다른 주문 — 무시
+	if monitor.ActiveCount() != 1 {
+		t.Fatal("다른 주문의 통보는 무시")
 	}
 }

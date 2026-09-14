@@ -1,25 +1,37 @@
 /** ON_TRADE 트리거 — 스트림 틱이 tick 을 촉발하고, 합쳐지고, 최소 간격을 지키고, 현재가를 REST 대신 틱에서 가져오는지 (Kotlin StrategyEngineStreamTest 대응). */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { BrokerClient, MarketStream, StreamingBrokerClient, TradeListener } from "../src/broker.js";
+import type { BrokerClient, MarketStream, OrderBookListener, OrderEventListener, StreamingBrokerClient, TradeListener } from "../src/broker.js";
 import { StrategyEngine } from "../src/engine.js";
 import { Decimal } from "../src/models.js";
-import type { BrokerCapabilities, Quote, StreamChannel, TradeTick } from "../src/models.js";
+import type { BrokerCapabilities, OrderBookTick, OrderEvent, Quote, StreamChannel, TradeTick } from "../src/models.js";
 import type { Signal, Strategy, StrategySpec } from "../src/strategy.js";
 import { StrategyContext } from "../src/strategy.js";
 
 /** 연결 없이 틱을 밀어 넣을 수 있는 가짜 스트림 */
 class FakeStream implements MarketStream {
   readonly listeners: [string[], TradeListener][] = [];
+  readonly bookListeners: [string[], OrderBookListener][] = [];
+  readonly orderListeners: OrderEventListener[] = [];
   closed = false;
   get isConnected() { return !this.closed; }
   connect() {}
   subscribeTrades(symbols: string[], listener: TradeListener) { this.listeners.push([symbols, listener]); }
+  subscribeOrderBook(symbols: string[], listener: OrderBookListener) { this.bookListeners.push([symbols, listener]); }
+  subscribeOrderEvents(listener: OrderEventListener) { this.orderListeners.push(listener); }
   close() { this.closed = true; }
   emit(symbol: string, price: string) {
     const tick: TradeTick = { symbol, price: new Decimal(price), quantity: new Decimal(1), timestamp: new Date(), cumulativeVolume: 10 };
     for (const [symbols, listener] of this.listeners) if (symbols.includes(symbol)) listener(tick);
   }
+  emitBook(symbol: string, ask: string, bid: string) {
+    const tick: OrderBookTick = {
+      symbol, timestamp: new Date(),
+      asks: [{ price: new Decimal(ask), quantity: new Decimal(10) }], bids: [{ price: new Decimal(bid), quantity: new Decimal(10) }],
+    };
+    for (const [symbols, listener] of this.bookListeners) if (symbols.includes(symbol)) listener(tick);
+  }
+  emitOrderEvent(event: OrderEvent) { for (const l of this.orderListeners) l(event); }
 }
 
 class FakeBroker implements BrokerClient {
@@ -50,9 +62,13 @@ class FakeBroker implements BrokerClient {
 }
 
 class StreamingFakeBroker extends FakeBroker implements StreamingBrokerClient {
-  constructor(readonly stream: FakeStream) { super(["TRADES"]); }
+  readonly applied: OrderEvent[] = [];
+  constructor(readonly stream: FakeStream, streams: StreamChannel[] = ["TRADES"]) { super(streams); }
   openStream() { return this.stream; }
+  applyOrderEvent(event: OrderEvent) { this.applied.push(event); }
 }
+
+const ALL: StreamChannel[] = ["TRADES", "ORDER_BOOK", "ORDER_EVENTS"];
 
 class RecordingStrategy implements Strategy {
   readonly calls: [number, StrategyContext][] = [];
@@ -149,4 +165,56 @@ test("stop 은 스트림을 닫는다", async () => {
   engine.stop();
   await running;
   assert.equal(stream.closed, true);
+});
+
+test("orderBook 전략은 호가 스트림을 구독하고 최신 호가창이 컨텍스트로 들어간다", async () => {
+  const stream = new FakeStream();
+  const broker = new StreamingFakeBroker(stream, ALL);
+  const strategy = new RecordingStrategy({ ...spec(["005930"]), orderBook: true });
+  const stop = start(new StrategyEngine(broker, [strategy]));
+  try {
+    assert.deepEqual(stream.bookListeners[0][0], ["005930"]);
+    await awaitCalls(strategy, 1);
+    assert.equal(strategy.calls[0][1].orderBook("005930"), undefined); // 아직 호가 없음
+    stream.emitBook("005930", "250500", "250000");
+    stream.emit("005930", "250500");
+    await awaitCalls(strategy, 2);
+    const book = strategy.calls[1][1].orderBook("KRX:005930"); // 접두 무시 조회
+    assert.ok(book!.asks[0].price.eq(250500));
+    assert.ok(book!.bids[0].price.eq(250000));
+  } finally { await stop(); }
+});
+
+test("주문 통보는 어댑터 applyOrderEvent 와 브라켓에 전달된다", async () => {
+  const stream = new FakeStream();
+  const broker = new StreamingFakeBroker(stream, ALL);
+  const engine = new StrategyEngine(broker, [new RecordingStrategy(spec(["005930"]))]);
+  const stop = start(engine);
+  try {
+    await sleep(50);
+    assert.equal(stream.orderListeners.length, 1);
+    engine.brackets.register("0012345", "005930", new Decimal(1), new Decimal("300000"), null);
+    const event: OrderEvent = { orderId: "0000012345", type: "FILLED", timestamp: new Date(), quantity: new Decimal(1) };
+    stream.emitOrderEvent(event);
+    assert.deepEqual(broker.applied, [event]);
+    // 브라켓이 통보로 활성화됐으면 getOrder 를 부르지 않고도 청산 판단이 가능하다 (FakeBroker.getOrder 는 throw)
+    const ctx = new StrategyContext(new Date(), new Map([["005930", { symbol: "005930", price: new Decimal(310000), bidPrice: null, askPrice: null, volume: 0, change: null, changeRate: null, timestamp: new Date() }]]),
+      new Map(), await broker.getAccount(), new Map([["005930", { symbol: "005930", quantity: new Decimal(1), avgEntryPrice: new Decimal(250000) }]]), [], new Decimal(1));
+    const signals = await engine.brackets.check(ctx);
+    assert.equal(signals.length, 1);
+  } finally { await stop(); }
+});
+
+test("주문 통보 구독이 실패해도 엔진은 기동한다 (KIS HTS ID 미설정 등)", async () => {
+  const stream = new FakeStream();
+  stream.subscribeOrderEvents = () => { throw new Error("HTS ID 필요"); };
+  const broker = new StreamingFakeBroker(stream, ALL);
+  const strategy = new RecordingStrategy(spec(["005930"]));
+  const engine = new StrategyEngine(broker, [strategy]);
+  const stop = start(engine);
+  try {
+    await awaitCalls(strategy, 1);
+    assert.equal(stream.orderListeners.length, 0);
+    assert.equal(engine.strategies.length, 1);
+  } finally { await stop(); }
 });

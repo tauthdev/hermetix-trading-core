@@ -73,6 +73,25 @@ await new StrategyEngine(new KisClient(appkey, appsecret, cano), [strategy]).run
 - 스트림이 끊기면 지수 백오프로 재접속하고 구독을 복원하며, 그동안 `pollIntervalSeconds` 폴링이 안전망으로 돕니다. 스트림을 선언하지 않은 브로커에서는 경고 후 폴링으로 동작합니다
 - Node 22+ 필요 (내장 `WebSocket`). 테스트의 가짜 서버만 `ws` 를 devDependency 로 씁니다
 
+### 호가·주문 통보 (2차 채널)
+
+```ts
+const strategy = {
+  spec: { name: "book", symbols: ["005930"], trigger: "ON_TRADE", orderBook: true },
+  decide(ctx) {
+    const book = ctx.orderBook("005930");            // 10단계 호가·잔량 (asks/bids 최우선부터), 없으면 undefined
+    if (book && bestAsk(book)!.quantity.gt(bestBid(book)!.quantity.mul(3))) return [];
+    return [];
+  },
+};
+// KIS 주문 통보는 HTS ID 가 있어야 구독된다 (9번째 인자). 없으면 경고만 남기고 체결 판정은 폴링으로 계속한다
+new KisClient(appkey, appsecret, cano, "01", "", 0, "PAPER", "", htsId);
+```
+
+- `spec.orderBook = true` → 심볼 호가창 스트림(kis `H0STASP0`·kiwoom `0D`, 2026-09 모의 실측)을 구독해 `ctx.orderBook(symbol)` 로 공급합니다. 호가는 틱을 촉발하지 않습니다
+- 주문 통보(kis `H0STCNI9/0`·kiwoom `00`)는 브로커가 제공하면 엔진이 자동 구독합니다 — 진입 주문 체결을 서버 조회 없이 브라켓에 반영하고(`BracketMonitor.onOrderEvent`), KIS 모의처럼 주문 조회가 없는 어댑터의 메모리 추적도 즉시 확정합니다(`applyOrderEvent`). 통보 프레임은 문서 기반으로 실측 전입니다
+- KIS 통보 프레임은 AES-256-CBC 암호문이며 구독 응답의 key/iv 로 복호화합니다 (Node 내장 `crypto`, 추가 의존성 없음)
+
 ## 공식 전략 예제 (examples/)
 
 Kotlin 전략 레포 3종과 동일 로직:

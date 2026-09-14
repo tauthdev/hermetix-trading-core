@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -245,5 +246,240 @@ func TestKiwoomStreamReconnectsReloginsAndRegisters(t *testing.T) {
 	second.send(t, `{"trnm":"LOGIN","return_code":0}`)
 	if !strings.Contains(second.take(t), `"trnm":"REG"`) {
 		t.Fatal("재로그인 후 REG")
+	}
+}
+
+// ---------------------------------------------------------------- 2차 채널: 호가·주문 통보
+
+const (
+	kisTestKey = "zkkljxnqkyodprlmaksyyilhzjmxqjer" // 32자 (실측 구독 응답과 같은 형식)
+	kisTestIV  = "d82e2f422913e3b2"                 // 16자
+)
+
+func kisBookFields() string {
+	fields := []string{"005930", "105530", "0"}
+	for i := 0; i < 10; i++ {
+		fields = append(fields, strconv.Itoa(250500+500*i))
+	}
+	for i := 0; i < 10; i++ {
+		fields = append(fields, strconv.Itoa(250000-500*i))
+	}
+	for i := 0; i < 10; i++ {
+		fields = append(fields, strconv.Itoa(1000*(i+1)))
+	}
+	for i := 0; i < 10; i++ {
+		fields = append(fields, strconv.Itoa(2000*(i+1)))
+	}
+	fields = append(fields, "55000", "65000", "0", "0")
+	return strings.Join(fields, "^")
+}
+
+func TestKisStreamOrderBook(t *testing.T) {
+	srv, connections := newWsServer(t)
+	stream := newKisMarketStream(wsURL(srv), "P", func() (string, error) { return "k", nil })
+	defer stream.Close()
+	books := make(chan OrderBookTick, 16)
+	if err := stream.SubscribeOrderBook([]string{"KRX:005930"}, func(tick OrderBookTick) { books <- tick }); err != nil {
+		t.Fatal(err)
+	}
+	stream.Connect()
+	conn := waitConn(t, connections, 5*time.Second)
+	if sub := conn.take(t); !strings.Contains(sub, `"tr_id":"H0STASP0"`) || !strings.Contains(sub, `"tr_key":"005930"`) {
+		t.Fatalf("subscribe = %s", sub)
+	}
+	conn.send(t, "0|H0STASP0|001|"+kisBookFields())
+	var book OrderBookTick
+	select {
+	case book = <-books:
+	case <-time.After(5 * time.Second):
+		t.Fatal("호가가 오지 않음")
+	}
+	ask, _ := book.BestAsk()
+	bid, _ := book.BestBid()
+	if book.Symbol != "KRX:005930" || len(book.Asks) != 10 || ask.Price.String() != "250500" || ask.Quantity.String() != "1000" ||
+		bid.Price.String() != "250000" || bid.Quantity.String() != "2000" || book.Asks[9].Price.String() != "255000" {
+		t.Fatalf("book = %+v", book)
+	}
+	assertDecimalEqual(t, "totalAsk", book.TotalAskQuantity, "55000")
+	assertDecimalEqual(t, "totalBid", book.TotalBidQuantity, "65000")
+}
+
+func TestKisStreamOrderEventsDecrypted(t *testing.T) {
+	srv, connections := newWsServer(t)
+	stream := newKisMarketStream(wsURL(srv), "P", func() (string, error) { return "k", nil })
+	stream.htsID = "HTSUSER"
+	defer stream.Close()
+	events := make(chan OrderEvent, 16)
+	if err := stream.SubscribeOrderEvents(func(e OrderEvent) { events <- e }); err != nil {
+		t.Fatal(err)
+	}
+	stream.Connect()
+	conn := waitConn(t, connections, 5*time.Second)
+	if sub := conn.take(t); !strings.Contains(sub, `"tr_id":"H0STCNI9"`) || !strings.Contains(sub, `"tr_key":"HTSUSER"`) {
+		t.Fatalf("subscribe = %s", sub)
+	}
+	conn.send(t, `{"header":{"tr_id":"H0STCNI9","tr_key":"HTSUSER","encrypt":"Y"},"body":{"rt_cd":"0","msg_cd":"OPSP0000","msg1":"SUBSCRIBE SUCCESS","output":{"iv":"`+kisTestIV+`","key":"`+kisTestKey+`"}}}`)
+	accepted := "HTSUSER^50199202^0000012345^0000000000^02^0^00^0^005930^0^0^105530^0^1^1^00950^3^홍길동^0^^N^^^^삼성전자^250000"
+	filled := "HTSUSER^50199202^0000012345^0000000000^02^0^00^0^005930^3^250000^105531^0^2^2^00950^3^홍길동^0^^N^^^^삼성전자^250000"
+	for _, plain := range []string{accepted, filled} {
+		enc, err := KisEncrypt(plain, kisTestKey, kisTestIV)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.send(t, "1|H0STCNI9|001|"+enc)
+	}
+	take := func() OrderEvent {
+		select {
+		case e := <-events:
+			return e
+		case <-time.After(5 * time.Second):
+			t.Fatal("주문 통보가 오지 않음")
+			return OrderEvent{}
+		}
+	}
+	e1 := take()
+	if e1.Type != OrderAccepted || e1.OrderID != "0000012345" || !e1.OrderIDMatches("12345") || e1.Symbol != "005930" || e1.Side == nil || *e1.Side != Buy {
+		t.Fatalf("e1 = %+v", e1)
+	}
+	assertDecimalEqual(t, "quantity", e1.Quantity, "3")
+	assertDecimalEqual(t, "price", e1.Price, "250000")
+	e2 := take()
+	if e2.Type != OrderFilled {
+		t.Fatalf("e2 = %+v", e2)
+	}
+	assertDecimalEqual(t, "fill quantity", e2.Quantity, "3")
+	assertDecimalEqual(t, "fill price", e2.Price, "250000")
+}
+
+func TestKisStreamOrderEventsRequireHTSID(t *testing.T) {
+	stream := newKisMarketStream("ws://127.0.0.1:1", "P", func() (string, error) { return "k", nil })
+	defer stream.Close()
+	if err := stream.SubscribeOrderEvents(func(OrderEvent) {}); err == nil || !strings.Contains(err.Error(), "HTS ID") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestKisCryptoRoundTrip(t *testing.T) {
+	plain := "005930^105530^250000"
+	enc, err := KisEncrypt(plain, kisTestKey, kisTestIV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := KisDecrypt(enc, kisTestKey, kisTestIV)
+	if err != nil || dec != plain {
+		t.Fatalf("dec = %q err = %v", dec, err)
+	}
+}
+
+func kiwoomBookFrame() string {
+	values := map[string]string{"21": "105530", "121": "55000", "125": "65000"}
+	for i := 0; i < 10; i++ {
+		values[strconv.Itoa(41+i)] = "-" + strconv.Itoa(250500+500*i)
+		values[strconv.Itoa(61+i)] = strconv.Itoa(1000 * (i + 1))
+		values[strconv.Itoa(51+i)] = "-" + strconv.Itoa(250000-500*i)
+		values[strconv.Itoa(71+i)] = strconv.Itoa(2000 * (i + 1))
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"data": []map[string]any{{"values": values, "type": "0D", "name": "주식호가잔량", "item": "A005930"}},
+		"trnm": "REAL",
+	})
+	return string(raw)
+}
+
+const kiwoomOrderFrame = `{"data":[{"values":{"9203":"0000012345","904":"0000000000","9001":"A005930","913":"체결","905":"+매수","907":"2","900":"1","901":"+250000","902":"0","910":"+250000","911":"1","908":"105531","919":""},"type":"00","name":"주문체결","item":""}],"trnm":"REAL"}`
+
+func TestKiwoomStreamOrderBookAndOrderEvents(t *testing.T) {
+	srv, connections := newWsServer(t)
+	stream := newKiwoomMarketStream(wsURL(srv), func() (string, error) { return "t", nil })
+	defer stream.Close()
+	books := make(chan OrderBookTick, 16)
+	events := make(chan OrderEvent, 16)
+	if err := stream.SubscribeOrderBook([]string{"KRX:005930"}, func(tick OrderBookTick) { books <- tick }); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.SubscribeOrderEvents(func(e OrderEvent) { events <- e }); err != nil {
+		t.Fatal(err)
+	}
+	stream.Connect()
+	conn := waitConn(t, connections, 5*time.Second)
+	conn.take(t) // LOGIN
+	conn.send(t, `{"trnm":"LOGIN","return_code":0}`)
+	regs := []string{conn.take(t), conn.take(t)}
+	sawBook, sawOrders := false, false
+	for _, reg := range regs {
+		if strings.Contains(reg, `"type":["0D"]`) && strings.Contains(reg, `"item":["005930"]`) {
+			sawBook = true
+		}
+		if strings.Contains(reg, `"type":["00"]`) && strings.Contains(reg, `"item":[""]`) {
+			sawOrders = true
+		}
+	}
+	if !sawBook || !sawOrders {
+		t.Fatalf("regs = %v", regs)
+	}
+
+	conn.send(t, kiwoomBookFrame())
+	var book OrderBookTick
+	select {
+	case book = <-books:
+	case <-time.After(5 * time.Second):
+		t.Fatal("호가가 오지 않음")
+	}
+	ask, _ := book.BestAsk()
+	bid, _ := book.BestBid()
+	if book.Symbol != "KRX:005930" || ask.Price.String() != "250500" || ask.Quantity.String() != "1000" || bid.Price.String() != "250000" || book.Bids[1].Price.String() != "249500" {
+		t.Fatalf("book = %+v", book)
+	}
+	assertDecimalEqual(t, "totalAsk", book.TotalAskQuantity, "55000")
+
+	conn.send(t, kiwoomOrderFrame)
+	var e OrderEvent
+	select {
+	case e = <-events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("주문 통보가 오지 않음")
+	}
+	if e.Type != OrderFilled || e.OrderID != "0000012345" || e.Symbol != "005930" || e.Side == nil || *e.Side != Buy {
+		t.Fatalf("event = %+v", e)
+	}
+	assertDecimalEqual(t, "quantity", e.Quantity, "1")
+	assertDecimalEqual(t, "price", e.Price, "250000")
+	assertDecimalEqual(t, "remaining", e.RemainingQuantity, "0")
+}
+
+func TestKiwoomOrderEventParsing(t *testing.T) {
+	frame := func(status, kind, filledQty, reason string) []byte {
+		return []byte(`{"trnm":"REAL","data":[{"type":"00","name":"주문체결","item":"A005930","values":{"9203":"0000012346","904":"0000000000","9001":"A005930","913":"` + status + `","905":"` + kind + `","907":"2","900":"1","901":"+240000","902":"1","910":"","911":"` + filledQty + `","908":"105530","919":"` + reason + `"}}]}`)
+	}
+	accepted := ParseKiwoomOrderEvents(frame("접수", "+매수", "0", ""), fixtureToday)
+	if len(accepted) != 1 || accepted[0].Type != OrderAccepted {
+		t.Fatalf("accepted = %+v", accepted)
+	}
+	assertDecimalEqual(t, "quantity", accepted[0].Quantity, "1")
+	assertDecimalEqual(t, "price", accepted[0].Price, "240000")
+	if e := ParseKiwoomOrderEvents(frame("확인", "매수취소", "0", ""), fixtureToday); e[0].Type != OrderCanceled {
+		t.Fatalf("canceled = %+v", e)
+	}
+	if e := ParseKiwoomOrderEvents(frame("확인", "매수정정", "0", ""), fixtureToday); e[0].Type != OrderModified {
+		t.Fatalf("modified = %+v", e)
+	}
+	if e := ParseKiwoomOrderEvents(frame("거부", "+매수", "0", "주문가능금액 부족"), fixtureToday); e[0].Type != OrderRejected || e[0].Reason != "주문가능금액 부족" {
+		t.Fatalf("rejected = %+v", e)
+	}
+}
+
+func TestKisOrderEventParsingCancelReject(t *testing.T) {
+	canceled := "U^A^0000000002^0000000001^01^2^00^0^005930^0^0^105530^0^1^2^00950^3^N^0^^N^^^^S^0"
+	rejected := "U^A^0000000003^0000000000^02^0^00^0^005930^0^0^105530^1^1^1^00950^3^N^0^^N^^^^S^0"
+	c := ParseKisOrderEvents("0|H0STCNI9|001|"+canceled, fixtureToday)
+	if len(c) != 1 || c[0].Type != OrderCanceled || c[0].Side == nil || *c[0].Side != Sell || c[0].OriginalOrderID != "0000000001" {
+		t.Fatalf("canceled = %+v", c)
+	}
+	r := ParseKisOrderEvents("0|H0STCNI0|001|"+rejected, fixtureToday)
+	if len(r) != 1 || r[0].Type != OrderRejected {
+		t.Fatalf("rejected = %+v", r)
+	}
+	if other := ParseKisOrderEvents("0|H0STCNT0|001|"+canceled, fixtureToday); len(other) != 0 {
+		t.Fatal("다른 TR 은 무시")
 	}
 }

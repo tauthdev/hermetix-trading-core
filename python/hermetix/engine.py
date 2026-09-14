@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo
 
 from .broker import BrokerClient, MarketStream, StreamingBrokerClient
 from .errors import InsufficientFundsError, MarketClosedError, RateLimitError
-from .models import CreateOrderRequest, Order, OrderSide, OrderStatus, OrderType, StreamChannel, TradeTick, TradingEnvironment
+from .models import (CreateOrderRequest, Order, OrderBookTick, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType,
+                     StreamChannel, TradeTick, TradingEnvironment)
 from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, TickTrigger
 
 logger = logging.getLogger("hermetix")
@@ -154,6 +155,7 @@ class _Bracket:
     take_profit: Decimal | None
     stop_loss: Decimal | None
     active: bool = False
+    filled_quantity: Decimal = Decimal(0)
 
 
 class BracketMonitor:
@@ -214,6 +216,22 @@ class BracketMonitor:
             logger.info("bracket dropped / entry %s %s", order.status.value, bracket.entry_order_id)
             return None
         return bracket
+
+    def on_order_event(self, event: OrderEvent) -> None:
+        """주문 통보로 진입 주문 상태를 바로 반영한다 (서버 조회 없이). 체결은 누적해 주문 수량을 채우면 활성화,
+        취소·거부는 폐기. 통보가 없는 브로커에서는 기존처럼 틱마다 _resolve_entry 가 조회한다."""
+        bracket = next((b for b in self._brackets.values() if event.order_id_matches(b.entry_order_id)), None)
+        if bracket is None:
+            return
+        if event.type == OrderEventType.FILLED:
+            filled = bracket.filled_quantity + (event.quantity or Decimal(0))
+            active = bracket.active or filled >= bracket.quantity
+            self._brackets[bracket.entry_order_id] = replace(bracket, filled_quantity=filled, active=active)
+            if active and not bracket.active:
+                logger.info("bracket activated / entry filled by event %s", bracket.entry_order_id)
+        elif event.type in (OrderEventType.CANCELED, OrderEventType.REJECTED):
+            del self._brackets[bracket.entry_order_id]
+            logger.info("bracket dropped / entry %s by event %s", event.type.value, bracket.entry_order_id)
 
     @property
     def active_count(self) -> int:
@@ -320,6 +338,8 @@ class StrategyEngine:
         self._wake = threading.Event()           # 스트림 틱이 run 루프를 깨운다
         self._stream: MarketStream | None = None
         self.latest_trades: dict[str, TradeTick] = {}   # 심볼(요청 표기) -> 마지막 체결 틱
+        self.latest_order_books: dict[str, OrderBookTick] = {}  # 심볼(요청 표기) -> 마지막 호가창 (spec.order_book 전략만)
+        self._order_events_attached = False
         self._pending: dict[str, bool] = {}              # 전략 이름 -> 대기 중인 스트림 틱 (합치기용)
         self._last_tick_ended_at: dict[str, float] = {}  # 전략 이름 -> 직전 tick 종료 시각 (monotonic)
 
@@ -350,32 +370,87 @@ class StrategyEngine:
         for strategy in self.strategies:
             if strategy.spec.trigger == TickTrigger.ON_TRADE:
                 self._attach_stream(strategy)
+            if strategy.spec.order_book:
+                self._attach_order_book(strategy)
+        self._attach_order_events()
 
     @property
     def stream_connected(self) -> bool:
         """스트림이 열려 있고 로그인까지 끝났는지 - 상태 확인용"""
         return self._stream is not None and self._stream.is_connected
 
-    def _attach_stream(self, strategy: Strategy) -> None:
-        """ON_TRADE 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다"""
-        spec = strategy.spec
+    def _stream_for(self, channel: StreamChannel) -> MarketStream | None:
+        """브로커가 채널을 제공하면 공유 스트림을 (필요 시 열어) 돌려주고, 아니면 None"""
         broker = self.broker
-        if not isinstance(broker, StreamingBrokerClient) or StreamChannel.TRADES not in broker.capabilities.streams:
-            logger.warning("[%s] trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - "
-                           "poll_interval=%ss 폴링으로 동작합니다", spec.name, broker.capabilities.broker_id,
-                           spec.poll_interval_seconds)
-            return
+        if not isinstance(broker, StreamingBrokerClient) or channel not in broker.capabilities.streams:
+            return None
         if self._stream is None:
             self._stream = broker.open_stream()
             self._stream.connect()
+        return self._stream
+
+    def _attach_stream(self, strategy: Strategy) -> None:
+        """ON_TRADE 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다"""
+        spec = strategy.spec
+        stream = self._stream_for(StreamChannel.TRADES)
+        if stream is None:
+            logger.warning("[%s] trigger=ON_TRADE 이지만 브로커 '%s' 는 체결가 스트림을 제공하지 않습니다 - "
+                           "poll_interval=%ss 폴링으로 동작합니다", spec.name, self.broker.capabilities.broker_id,
+                           spec.poll_interval_seconds)
+            return
 
         def on_trade(tick: TradeTick, strategy=strategy) -> None:
             self.latest_trades[tick.symbol] = tick
             self.request_tick(strategy)
 
-        self._stream.subscribe_trades(spec.symbols, on_trade)
+        stream.subscribe_trades(spec.symbols, on_trade)
         logger.info("[%s] trade stream attached / symbols=%s min_tick_interval=%ss",
                     spec.name, spec.symbols, spec.min_tick_interval_seconds)
+
+    def _attach_order_book(self, strategy: Strategy) -> None:
+        """spec.order_book 전략의 심볼 호가창을 구독해 컨텍스트로 공급한다. 틱을 촉발하지는 않는다"""
+        spec = strategy.spec
+        stream = self._stream_for(StreamChannel.ORDER_BOOK)
+        if stream is None:
+            logger.warning("[%s] order_book=True 이지만 브로커 '%s' 는 호가 스트림을 제공하지 않습니다 - "
+                           "컨텍스트의 order_book 은 비어 있습니다", spec.name, self.broker.capabilities.broker_id)
+            return
+
+        def on_book(tick: OrderBookTick) -> None:
+            self.latest_order_books[tick.symbol] = tick
+
+        stream.subscribe_order_book(spec.symbols, on_book)
+        logger.info("[%s] order book stream attached / symbols=%s", spec.name, spec.symbols)
+
+    def _attach_order_events(self) -> None:
+        """주문 통보를 구독해 어댑터 추적(apply_order_event)과 브라켓(on_order_event)에 반영한다.
+        브로커가 제공하면 항상 붙인다 - 구독 실패(KIS HTS ID 미설정 등)는 경고만 남기고 폴링 판정으로 둔다"""
+        if self._order_events_attached:
+            return
+        broker = self.broker
+        if not isinstance(broker, StreamingBrokerClient):
+            return
+        stream = self._stream_for(StreamChannel.ORDER_EVENTS)
+        if stream is None:
+            return
+        try:
+            stream.subscribe_order_events(lambda event: self._on_order_event(broker, event))
+            self._order_events_attached = True
+            logger.info("order event stream attached")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("주문 통보 스트림을 구독하지 못했습니다 - 체결 판정은 폴링으로 계속합니다: %s", e)
+
+    def _on_order_event(self, broker: StreamingBrokerClient, event: OrderEvent) -> None:
+        logger.info("order event / %s order=%s %s %s qty=%s price=%s", event.type.value, event.order_id,
+                    event.symbol or "", event.side.value if event.side else "", event.quantity, event.price)
+        try:
+            broker.apply_order_event(event)
+        except Exception:  # noqa: BLE001
+            logger.exception("apply_order_event 실패 / %s", event.order_id)
+        try:
+            self.brackets.on_order_event(event)
+        except Exception:  # noqa: BLE001
+            logger.exception("bracket on_order_event 실패 / %s", event.order_id)
 
     def request_tick(self, strategy: Strategy) -> None:
         """스트림 틱으로 tick 을 요청한다. 이미 대기 중이면 합친다. 스트림 스레드에서 호출되므로 플래그만 세우고 루프를 깨운다"""
@@ -486,6 +561,8 @@ class StrategyEngine:
             holdings={h.symbol: h for h in self.broker.get_holdings()},
             open_orders=[o for o in self.broker.get_orders() if o.status.is_open],
             buying_power=self.broker.get_buying_power(),
+            order_books={s: self.latest_order_books[s] for s in spec.symbols if s in self.latest_order_books}
+            if spec.order_book else {},
         )
 
 

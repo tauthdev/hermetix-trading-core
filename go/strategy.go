@@ -33,6 +33,7 @@ type StrategySpec struct {
 	RegularHoursOnly *bool          // 기본 true
 	Trigger          TickTrigger    // 기본 TriggerPoll
 	MinTickInterval  time.Duration  // TriggerOnTrade 에서 연속 호출 사이 최소 간격. 기본 1s
+	OrderBook        bool           // true 면 심볼의 호가창 스트림을 구독해 StrategyContext.OrderBook 으로 공급 (브로커가 StreamOrderBook 을 선언한 경우만)
 }
 
 func (s StrategySpec) minTickInterval() time.Duration {
@@ -106,6 +107,8 @@ type StrategyContext struct {
 	Holdings    map[string]Holding
 	OpenOrders  []Order
 	BuyingPower decimal.Decimal
+	// 심볼별 최신 호가창 — StrategySpec.OrderBook 을 켠 전략에만, 스트림이 한 번이라도 준 심볼만
+	OrderBooks map[string]OrderBookTick
 }
 
 // 심볼 조회는 MARKET:CODE 접두 유무를 무시하고 코드로 맞춘다 (SymbolsMatch).
@@ -125,6 +128,11 @@ func bySymbol[T any](m map[string]T, symbol string) (T, bool) {
 
 func (c *StrategyContext) Quote(symbol string) (Quote, bool) {
 	return bySymbol(c.Quotes, symbol)
+}
+
+// OrderBook - 최신 호가창 (MARKET:CODE 접두 무시).
+func (c *StrategyContext) OrderBook(symbol string) (OrderBookTick, bool) {
+	return bySymbol(c.OrderBooks, symbol)
 }
 
 func (c *StrategyContext) CandlesOf(symbol string) []Candle {

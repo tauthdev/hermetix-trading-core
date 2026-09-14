@@ -8,8 +8,29 @@ import pytest
 
 websockets = pytest.importorskip("websockets")
 
-from hermetix.brokers.kis_stream import KisMarketStream  # noqa: E402
+from hermetix.brokers.kis_stream import KisMarketStream, kis_decrypt, kis_encrypt  # noqa: E402
 from hermetix.brokers.kiwoom_stream import KiwoomMarketStream  # noqa: E402
+
+pytest.importorskip("cryptography")
+
+KEY = "zkkljxnqkyodprlmaksyyilhzjmxqjer"  # 32자 (실측 구독 응답과 같은 형식)
+IV = "d82e2f422913e3b2"                   # 16자
+# H0STASP0 본문 - 0 코드, 1 시각, 2 시간구분, 3-12 매도호가, 13-22 매수호가, 23-32 매도잔량, 33-42 매수잔량, 43 총매도잔량, 44 총매수잔량
+KIS_BOOK_FIELDS = "^".join(["005930", "105530", "0"]
+                           + [str(250500 + 500 * i) for i in range(10)] + [str(250000 - 500 * i) for i in range(10)]
+                           + [str(1000 * (i + 1)) for i in range(10)] + [str(2000 * (i + 1)) for i in range(10)]
+                           + ["55000", "65000", "0", "0"])
+KIS_ORDER_ACCEPTED = "HTSUSER^50199202^0000012345^0000000000^02^0^00^0^005930^0^0^105530^0^1^1^00950^3^홍길동^0^^N^^^^삼성전자^250000"
+KIS_ORDER_FILLED = "HTSUSER^50199202^0000012345^0000000000^02^0^00^0^005930^3^250000^105531^0^2^2^00950^3^홍길동^0^^N^^^^삼성전자^250000"
+_book_values = {"21": "105530", "121": "55000", "125": "65000"}
+for _i in range(10):
+    _book_values[str(41 + _i)] = f"-{250500 + 500 * _i}"; _book_values[str(61 + _i)] = str(1000 * (_i + 1))
+    _book_values[str(51 + _i)] = f"-{250000 - 500 * _i}"; _book_values[str(71 + _i)] = str(2000 * (_i + 1))
+KIWOOM_BOOK = json.dumps({"data": [{"values": _book_values, "type": "0D", "name": "주식호가잔량", "item": "A005930"}], "trnm": "REAL"})
+KIWOOM_ORDER = json.dumps({"data": [{"values": {
+    "9203": "0000012345", "904": "0000000000", "9001": "A005930", "913": "체결", "905": "+매수", "907": "2", "900": "1",
+    "901": "+250000", "902": "0", "910": "+250000", "911": "1", "908": "105531", "919": ""},
+    "type": "00", "name": "주문체결", "item": ""}], "trnm": "REAL"})
 
 KIS_FIELDS = "005930^093012^71500^5^300^-0.42^71480^71800^71900^71300^71500^71400^15^1234567^0^0^0^0^0^0"
 KIWOOM_REAL = json.dumps({"data": [{"type": "0B", "name": "주식체결", "item": "A005930", "values": {
@@ -98,8 +119,8 @@ def wait_until(predicate, seconds: float = 5):
 
 # ------------------------------------------------------------------ KIS
 
-def kis_stream(server) -> KisMarketStream:
-    return KisMarketStream(f"ws://127.0.0.1:{server.port}/", "P", lambda: "APPROVAL-KEY")
+def kis_stream(server, hts_id: str = "HTSUSER") -> KisMarketStream:
+    return KisMarketStream(f"ws://127.0.0.1:{server.port}/", "P", lambda: "APPROVAL-KEY", hts_id=hts_id)
 
 
 def test_kis_subscribes_with_approval_key_and_delivers_tick_in_requested_notation(server):
@@ -162,6 +183,61 @@ def test_kis_late_subscription_is_sent_immediately(server):
         stream.close()
 
 
+def test_kis_order_book_subscribe_and_frame(server):
+    books: queue.Queue = queue.Queue()
+    stream = kis_stream(server)
+    try:
+        stream.subscribe_order_book(["KRX:005930"], books.put)
+        stream.connect()
+        conn = server.take()
+        assert json.loads(conn.take())["body"]["input"] == {"tr_id": "H0STASP0", "tr_key": "005930"}
+        conn.send("0|H0STASP0|001|" + KIS_BOOK_FIELDS)
+        book = books.get(timeout=5)
+        assert book.symbol == "KRX:005930"
+        assert len(book.asks) == 10 and len(book.bids) == 10
+        assert (str(book.best_ask.price), str(book.best_ask.quantity)) == ("250500", "1000")
+        assert (str(book.best_bid.price), str(book.best_bid.quantity)) == ("250000", "2000")
+        assert str(book.asks[9].price) == "255000"
+        assert str(book.total_ask_quantity) == "55000" and str(book.total_bid_quantity) == "65000"
+    finally:
+        stream.close()
+
+
+def test_kis_order_events_decrypt_with_key_iv_from_subscribe_response(server):
+    events: queue.Queue = queue.Queue()
+    stream = kis_stream(server)
+    try:
+        stream.subscribe_order_events(events.put)
+        stream.connect()
+        conn = server.take()
+        subscribe = json.loads(conn.take())
+        assert subscribe["body"]["input"] == {"tr_id": "H0STCNI9", "tr_key": "HTSUSER"}  # 모의
+
+        conn.send(json.dumps({"header": {"tr_id": "H0STCNI9", "tr_key": "HTSUSER", "encrypt": "Y"},
+                              "body": {"rt_cd": "0", "msg_cd": "OPSP0000", "msg1": "SUBSCRIBE SUCCESS", "output": {"iv": IV, "key": KEY}}}))
+        conn.send("1|H0STCNI9|001|" + kis_encrypt(KIS_ORDER_ACCEPTED, KEY, IV))
+        conn.send("1|H0STCNI9|001|" + kis_encrypt(KIS_ORDER_FILLED, KEY, IV))
+
+        e1 = events.get(timeout=5)
+        assert e1.type.name == "ACCEPTED" and e1.order_id == "0000012345" and e1.order_id_matches("12345")
+        assert e1.symbol == "005930" and e1.side.name == "BUY" and e1.quantity == 3 and e1.price == 250000
+        e2 = events.get(timeout=5)
+        assert e2.type.name == "FILLED" and e2.quantity == 3 and e2.price == 250000
+    finally:
+        stream.close()
+
+
+def test_kis_order_events_require_hts_id(server):
+    stream = kis_stream(server, hts_id="")
+    with pytest.raises(ValueError, match="hts_id"):
+        stream.subscribe_order_events(lambda e: None)
+
+
+def test_kis_aes_roundtrip():
+    plain = "005930^105530^250000"
+    assert kis_decrypt(kis_encrypt(plain, KEY, IV), KEY, IV) == plain
+
+
 # ------------------------------------------------------------------ 키움
 
 def kiwoom_stream(server) -> KiwoomMarketStream:
@@ -216,5 +292,35 @@ def test_kiwoom_reconnects_relogins_and_reregisters(server):
         assert json.loads(second.take())["trnm"] == "LOGIN"
         second.send('{"trnm":"LOGIN","return_code":0}')
         assert json.loads(second.take())["trnm"] == "REG"
+    finally:
+        stream.close()
+
+
+def test_kiwoom_registers_order_book_by_code_and_order_events_with_empty_item(server):
+    books: queue.Queue = queue.Queue()
+    events: queue.Queue = queue.Queue()
+    stream = kiwoom_stream(server)
+    try:
+        stream.subscribe_order_book(["KRX:005930"], books.put)
+        stream.subscribe_order_events(events.put)
+        stream.connect()
+        conn = server.take()
+        conn.take()  # LOGIN
+        conn.send('{"trnm":"LOGIN","return_code":0}')
+        regs = [json.loads(conn.take()) for _ in range(2)]
+        by_type = {r["data"][0]["type"][0]: r["data"][0]["item"] for r in regs}
+        assert by_type == {"0D": ["005930"], "00": [""]}
+
+        conn.send(KIWOOM_BOOK)
+        book = books.get(timeout=5)
+        assert book.symbol == "KRX:005930"
+        assert (str(book.best_ask.price), str(book.best_ask.quantity)) == ("250500", "1000")
+        assert str(book.best_bid.price) == "250000" and str(book.bids[1].price) == "249500"
+        assert str(book.total_ask_quantity) == "55000"
+
+        conn.send(KIWOOM_ORDER)
+        e = events.get(timeout=5)
+        assert e.type.name == "FILLED" and e.order_id == "0000012345" and e.symbol == "005930"
+        assert e.side.name == "BUY" and e.quantity == 1 and e.price == 250000 and e.remaining_quantity == 0
     finally:
         stream.close()
