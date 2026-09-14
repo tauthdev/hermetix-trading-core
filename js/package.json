@@ -2,6 +2,26 @@
   "name": "hermetix",
   "version": "0.10.0",
   "description": "증권사 모의투자 통합 트레이딩 프레임워크 - JavaScript/TypeScript",
+  "keywords": [
+    "trading",
+    "paper-trading",
+    "stock",
+    "bot",
+    "korea",
+    "broker",
+    "kis",
+    "kiwoom",
+    "websocket"
+  ],
+  "homepage": "https://github.com/tauthdev/hermetix-trading-core/tree/main/js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tauthdev/hermetix-trading-core.git",
+    "directory": "js"
+  },
+  "bugs": {
+    "url": "https://github.com/tauthdev/hermetix-trading-core/issues"
+  },
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -11,10 +31,17 @@
       "import": "./dist/src/index.js"
     }
   },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "engines": {
     "node": ">=22"
   },
   "scripts": {
+    "prepublishOnly": "npm run build",
     "build": "tsc",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "smoke": "npm run build && node dist/tests/smoke.js"
