@@ -23,7 +23,8 @@ import kotlin.math.min
  * - [connect] 는 즉시 반환하고 전용 스레드에서 접속한다. 실패하면 1s → 2s → 4s … [maxBackoffMillis] 로 재시도
  * - 소켓이 닫히거나 오류가 나면 같은 백오프로 재접속한다. [close] 뒤에는 재접속하지 않는다
  * - [idleTimeoutMillis] 동안 프레임이 하나도 없으면 죽은 연결로 보고 끊고 재접속한다
- *   (브로커들이 주기적으로 PING 류 프레임을 보내므로 정상 연결에서는 발생하지 않는다)
+ *   (KIS·키움처럼 서버가 주기적으로 PING 류 프레임을 보내는 브로커용. 0 이면 끈다 — NH 처럼 조용한 게 정상인 브로커)
+ * - [heartbeatMillis] > 0 이면 그 주기로 [onHeartbeat] 를 부른다 (토스처럼 클라이언트가 먼저 PING 을 보내야 하는 브로커)
  * - 부분 프레임은 합쳐서 완성된 메시지 단위로 [onMessage] 에 넘긴다
  * - [send] 는 직렬화된다 (JDK WebSocket 은 동시 sendText 를 허용하지 않는다)
  */
@@ -31,6 +32,7 @@ abstract class ReconnectingWebSocket(
     private val name: String,
     private val maxBackoffMillis: Long = 30_000,
     private val idleTimeoutMillis: Long = 90_000,
+    private val heartbeatMillis: Long = 0,
     connectTimeout: Duration = Duration.ofSeconds(10),
 ) : AutoCloseable {
 
@@ -67,6 +69,7 @@ abstract class ReconnectingWebSocket(
     /** 매 (재)접속마다 호출된다 — 토큰·승인키 갱신은 여기서 */
     protected abstract fun uri(): URI
 
+    /** 접속 핸드셰이크에 실을 HTTP 헤더 — 매 (재)접속마다 호출된다 (토스: Authorization Bearer) */
     protected open fun headers(): Map<String, String> = emptyMap()
 
     /** 소켓이 열린 직후 (로그인/구독 전송). 스트림 스레드에서 호출된다 */
@@ -78,10 +81,14 @@ abstract class ReconnectingWebSocket(
     /** 연결이 끊긴 직후 (재접속 예약 전). 하위 클래스가 로그인 상태 등을 초기화한다 */
     protected open fun onDisconnected() {}
 
+    /** [heartbeatMillis] 주기로, 소켓이 열려 있을 때만 호출된다 (스트림 스레드) */
+    protected open fun onHeartbeat() {}
+
     fun connect() {
         check(!closed) { "$name stream: 닫힌 스트림은 다시 열 수 없다" }
         executor.execute { doConnect() }
-        executor.scheduleAtFixedRate(::checkIdle, idleTimeoutMillis, idleTimeoutMillis / 3, TimeUnit.MILLISECONDS)
+        if (idleTimeoutMillis > 0) executor.scheduleAtFixedRate(::checkIdle, idleTimeoutMillis, idleTimeoutMillis / 3, TimeUnit.MILLISECONDS)
+        if (heartbeatMillis > 0) executor.scheduleAtFixedRate({ if (!closed && socket != null) runCatching { onHeartbeat() }.onFailure { logger.warn { "$name stream: heartbeat 실패 - ${it.message}" } } }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS)
     }
 
     /** 텍스트 프레임 전송. 연결이 없으면 false */
