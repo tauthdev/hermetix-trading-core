@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.tripleauth.hermetix.broker.AuthError
 import com.tripleauth.hermetix.broker.BrokerApiException
 import com.tripleauth.hermetix.broker.BrokerCapabilities
-import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.StreamChannel
+import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.InsufficientFundsError
 import com.tripleauth.hermetix.broker.InvalidOrderError
 import com.tripleauth.hermetix.broker.KrxCalendar
@@ -65,7 +67,7 @@ import java.time.format.DateTimeFormatter
 class NhApiClient(
     private val properties: NhApiProperties,
     private val objectMapper: ObjectMapper,
-) : BrokerClient {
+) : StreamingBrokerClient {
 
     private val logger = KotlinLogging.logger { }
 
@@ -79,9 +81,14 @@ class NhApiClient(
         fractionalShares = false,
         serverOpenOrders = true, // dailyOrderExecution 으로 당일 미체결 조회
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
+        // 웹소켓 체결(oc/nc/mc)·호가(ob/nb/mb)·주문 통보(d2/d3) — 문서 기반, 실측 전
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
+
+    /** 실시간 스트림 — 토큰은 REST 와 같은 캐시를 쓴다 (운영 호스트 발급, 모의·운영 공용) */
+    override fun openStream(): MarketStream = NhMarketStream(properties, objectMapper, ::token)
 
     private val restClient = RestClient.builder().baseUrl(properties.resolvedBaseUrl()).build()
     private val authClient = RestClient.builder().baseUrl(properties.authUrl).build()
@@ -372,7 +379,7 @@ class NhApiClient(
         return response
     }
 
-    private fun token(): String {
+    internal fun token(): String {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
         return refreshToken()
@@ -434,7 +441,7 @@ class NhApiClient(
         /** SDK 가 성공으로 보는 rsp_cd — 00166(잔고) 00221(주문가능) 13578(조회 내역 없음) */
         private val SUCCESS_CODES = setOf("00000", "00166", "00221", "13578", "00165", "00218")
         /** prdy_vrss_sign 하락 계열 — 4/8 하한, 5/9 하락 */
-        private val FALLING_SIGNS = setOf("4", "5", "8", "9")
+        internal val FALLING_SIGNS = setOf("4", "5", "8", "9")
 
         /** 계좌·주문 API 의 iem_cd 는 길이 12(선행 0)일 수 있고 A 접두가 붙을 수 있다 → 6자리 코드로 정규화 */
         fun normalizeCode(raw: String): String {

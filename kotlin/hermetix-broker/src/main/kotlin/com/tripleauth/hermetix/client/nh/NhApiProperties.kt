@@ -28,10 +28,23 @@ data class NhApiProperties(
     val throttleMillis: Long = 250,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초) */
     val tokenRefreshMarginSeconds: Long = 300,
+    /**
+     * 실시간 웹소켓 주소. 비우면 환경에 따라 결정 — 모의 wss://moapi.nhplug.com:17070/websocket, 운영 wss://api.nhplug.com:7070/websocket.
+     *
+     * 문서 기반(실측 전) 주의점:
+     * - 포털 가이드는 시세 채널(oc/ob/mc/mb)의 모의 도메인을 "미제공" 으로 표기한다 — 모의(17070)에서는 통보(d2/d3)만 오고 시세는 안 올 수 있다
+     * - 운영은 국내 시세와 통보가 같은 포트(7070) 한 세션. 해외 시세는 7080 (여기서는 쓰지 않는다)
+     * - 세션당 실시간 등록 10건(공식 SDK 실측, 초과 시 close 1000) / 공식 문구는 30건 — 종목 N × (체결+호가) + 통보 2 를 10 안에 맞추는 게 안전
+     * - 앱키당 동시 세션 2개(WSS10015), 구독 메시지 10건/초(WSS10010)
+     * - 운영 WS 서버가 TLS 중간 CA 를 보내지 않아 JVM 기본 트러스트로 핸드셰이크가 실패할 수 있다 (`-Dcom.sun.security.enableAIAcaIssuers=true` 또는 중간 CA 를 트러스트스토어에 추가)
+     */
+    val wsUrl: String = "",
 ) {
     val isLive: Boolean get() = environment == TradingEnvironment.LIVE
 
     fun resolvedBaseUrl(): String = baseUrl.ifBlank { if (isLive) "https://api.nhplug.com:8443" else "https://moapi.nhplug.com:8443" }
+
+    fun resolvedWsUrl(): String = wsUrl.ifBlank { if (isLive) "wss://api.nhplug.com:7070/websocket" else "wss://moapi.nhplug.com:17070/websocket" }
 
     /** 환경에 맞는 계좌 구분 코드 — 모의 03, 운영 01 */
     fun expectedAcctType(): String = if (isLive) "01" else "03"
