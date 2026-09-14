@@ -23,4 +23,11 @@ data class TossApiProperties(
     val throttleMillis: Long = 200,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초). client 당 유효 토큰이 1개라 다른 프로세스가 재발급하면 이 토큰은 무효가 된다 */
     val tokenRefreshMarginSeconds: Long = 60,
+    /**
+     * 실시간 웹소켓 주소 (AsyncAPI 1.2.2, 실측 전). 모의투자 서버가 없어 실전 하나뿐이다.
+     * 한도: 계정당 동시 연결 2개(3번째가 오면 가장 오래된 연결을 서버가 끊는다), 연결당 구독 100개(채널×종목 합, personal:order 계좌 포함),
+     * 구독 선언 5회/초. 180초 동안 클라이언트가 아무것도 보내지 않으면 서버가 끊으므로 60초마다 텍스트 `PING` 을 보낸다.
+     * 토큰은 핸드셰이크에서만 검사되고 연결 중 만료돼도 끊기지 않는다 — 재접속 때 REST 어댑터가 캐시한 토큰을 그대로 쓴다(재발급하면 이전 토큰이 무효).
+     */
+    val wsUrl: String = "wss://openapi-ws.tossinvest.com/ws/v1",
 )
