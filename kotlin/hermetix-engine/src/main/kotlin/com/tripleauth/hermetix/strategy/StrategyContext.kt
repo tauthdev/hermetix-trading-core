@@ -1,6 +1,7 @@
 package com.tripleauth.hermetix.strategy
 
 import com.tripleauth.hermetix.broker.MarketSymbol
+import com.tripleauth.hermetix.broker.OrderBookTick
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.Candle
 import com.tripleauth.hermetix.client.dto.Holding
@@ -33,7 +34,11 @@ data class StrategyContext(
     val openOrders: List<OrderResponse>,
     /** 주문 가능 현금 */
     val buyingPower: BigDecimal,
+    /** 심볼별 최신 호가창 — [StrategySpec.orderBook] 을 켠 전략에만, 스트림이 한 번이라도 준 심볼만 */
+    val orderBooks: Map<String, OrderBookTick> = emptyMap(),
 ) {
+
+    fun orderBook(symbol: String): OrderBookTick? = orderBooks.bySymbol(symbol)
 
     fun quote(symbol: String): Quote? = quotes.bySymbol(symbol)
 

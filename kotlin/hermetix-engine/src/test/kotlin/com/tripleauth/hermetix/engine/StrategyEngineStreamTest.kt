@@ -4,6 +4,12 @@ import com.tripleauth.hermetix.Fixtures
 import com.tripleauth.hermetix.broker.BrokerCapabilities
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.OrderBookLevel
+import com.tripleauth.hermetix.broker.OrderBookListener
+import com.tripleauth.hermetix.broker.OrderBookTick
+import com.tripleauth.hermetix.broker.OrderEvent
+import com.tripleauth.hermetix.broker.OrderEventListener
+import com.tripleauth.hermetix.broker.OrderEventType
 import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.TradeListener
@@ -38,11 +44,20 @@ class StrategyEngineStreamTest {
     /** 연결 없이 틱을 밀어 넣을 수 있는 가짜 스트림 */
     private class FakeStream : MarketStream {
         val listeners = CopyOnWriteArrayList<Pair<List<String>, TradeListener>>()
+        val bookListeners = CopyOnWriteArrayList<Pair<List<String>, OrderBookListener>>()
+        val orderListeners = CopyOnWriteArrayList<OrderEventListener>()
         var closed = false
         override val isConnected: Boolean get() = !closed
         override fun connect() {}
         override fun subscribeTrades(symbols: List<String>, listener: TradeListener) { listeners += symbols to listener }
+        override fun subscribeOrderBook(symbols: List<String>, listener: OrderBookListener) { bookListeners += symbols to listener }
+        override fun subscribeOrderEvents(listener: OrderEventListener) { orderListeners += listener }
         override fun close() { closed = true }
+        fun emitBook(symbol: String, ask: String, bid: String) {
+            val tick = OrderBookTick(symbol, Instant.now(), asks = listOf(OrderBookLevel(BigDecimal(ask), BigDecimal.TEN)), bids = listOf(OrderBookLevel(BigDecimal(bid), BigDecimal.TEN)))
+            bookListeners.filter { symbol in it.first }.forEach { it.second.onOrderBook(tick) }
+        }
+        fun emitOrderEvent(event: OrderEvent) = orderListeners.forEach { it.onOrderEvent(event) }
         fun emit(symbol: String, price: String) {
             val tick = TradeTick(symbol = symbol, price = BigDecimal(price), quantity = BigDecimal.ONE, timestamp = Instant.now(), cumulativeVolume = 10L)
             listeners.filter { symbol in it.first }.forEach { it.second.onTrade(tick) }
@@ -65,6 +80,8 @@ class StrategyEngineStreamTest {
         engine?.destroy()
     }
 
+    private val allStreams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS)
+
     private fun caps(streams: Set<StreamChannel>) = BrokerCapabilities(
         brokerId = "test", market = "KRX", currency = "KRW",
         candleIntervals = setOf(CandleInterval.DAY_1), clientOrderId = false, nativeBracket = false, fractionalShares = false,
@@ -81,9 +98,10 @@ class StrategyEngineStreamTest {
         every { broker.getQuotes(any()) } answers { QuotesResponse(firstArg<List<String>>().map { Fixtures.quote(it, "1") }) }
     }
 
-    private fun streamingBroker(): StreamingBrokerClient = mockk<StreamingBrokerClient>().also {
-        every { it.capabilities } returns caps(setOf(StreamChannel.TRADES))
+    private fun streamingBroker(streams: Set<StreamChannel> = setOf(StreamChannel.TRADES)): StreamingBrokerClient = mockk<StreamingBrokerClient>().also {
+        every { it.capabilities } returns caps(streams)
         every { it.openStream() } returns stream
+        every { it.applyOrderEvent(any()) } returns Unit
         stubData(it)
     }
 
@@ -178,5 +196,51 @@ class StrategyEngineStreamTest {
         e.destroy()
         engine = null
         assertThat(stream.closed).isTrue()
+    }
+
+    @Test
+    fun `orderBook 전략은 호가 스트림을 구독하고 최신 호가창이 컨텍스트로 들어간다`() {
+        val broker = streamingBroker(allStreams)
+        val strategy = RecordingStrategy(spec(listOf("005930")).copy(orderBook = true))
+        engine(broker, strategy).start()
+        assertThat(stream.bookListeners.single().first).containsExactly("005930")
+        awaitCalls(strategy, 1)
+        assertThat(strategy.calls[0].second.orderBook("005930")).isNull() // 아직 호가 없음
+
+        stream.emitBook("005930", ask = "250500", bid = "250000")
+        stream.emit("005930", "250500")
+        awaitCalls(strategy, 2)
+        val book = strategy.calls[1].second.orderBook("KRX:005930") // 접두 무시 조회
+        assertThat(book?.bestAsk?.price).isEqualByComparingTo("250500")
+        assertThat(book?.bestBid?.price).isEqualByComparingTo("250000")
+    }
+
+    @Test
+    fun `주문 통보는 어댑터 applyOrderEvent 와 브라켓에 전달된다`() {
+        val broker = streamingBroker(allStreams)
+        val bracket = mockk<BracketMonitor>(relaxed = true).also { every { it.check(any()) } returns emptyList() }
+        val guard = mockk<TradingGuard>(relaxed = true).also { every { it.isHalted } returns false }
+        val e = StrategyEngine(listOf(RecordingStrategy(spec(listOf("005930")))), broker, mockk<MarketCalendarService>(), mockk(relaxed = true), bracket, guard).also { engine = it }
+        e.start()
+        assertThat(stream.orderListeners).hasSize(1)
+
+        val event = OrderEvent(orderId = "0000012345", type = OrderEventType.FILLED, timestamp = Instant.now(), quantity = BigDecimal.ONE)
+        stream.emitOrderEvent(event)
+        verify(exactly = 1) { broker.applyOrderEvent(event) }
+        verify(exactly = 1) { bracket.onOrderEvent(event) }
+    }
+
+    @Test
+    fun `주문 통보 구독이 실패해도 엔진은 기동한다 (KIS HTS ID 미설정 등)`() {
+        val broker = streamingBroker(allStreams)
+        val failing = object : MarketStream by stream {
+            override fun subscribeOrderEvents(listener: OrderEventListener) = throw IllegalStateException("HTS ID 필요")
+        }
+        every { broker.openStream() } returns failing
+        val strategy = RecordingStrategy(spec(listOf("005930")))
+        val e = engine(broker, strategy)
+        e.start()
+        assertThat(e.scheduledStrategies).containsExactly("s")
+        assertThat(stream.orderListeners).isEmpty()
     }
 }

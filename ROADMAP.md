@@ -44,7 +44,8 @@
 - [x] (0.8.0) 이벤트 기반 틱 — `StrategySpec.trigger = ON_TRADE`: 체결가 틱마다 전략 호출, 틱 합치기 + `minTickInterval`, 스트림 단절 시 폴링 안전망
 - [x] KIS·키움 모의 웹소켓 실측 → 픽스처 `stream` 섹션을 실측 프레임으로 교체 → README 실시간 열 ✅
 - [x] Python / JS / Go 포팅 — 같은 SPI·엔진 트리거·파서, 픽스처 `stream` 섹션(실측 프레임)으로 네 언어 파서 일치 검증. Python 은 선택 의존성 `websockets`(`pip install hermetix[stream]`), JS 는 Node 22 내장 WebSocket, Go 는 `github.com/coder/websocket`
-- [ ] 2차 채널 — 주문 체결 통보(KIS `H0STCNI9`/키움 `00`), 호가(KIS `H0STASP0`/키움 `0D`)
+- [x] (0.8.x) 2차 채널 — 호가(KIS `H0STASP0`/키움 `0D`, `StrategySpec.orderBook` → `context.orderBook()`) 2026-09-14 모의 실측 통과. 주문 통보(KIS `H0STCNI9`/키움 `00`, 엔진 자동 구독 → 브라켓·KIS 메모리 추적 즉시 반영) 는 구현·등록 확인까지 — **통보 프레임 실측 전** (KIS 는 HTS ID 필요, 이 키움 모의 계좌는 공매도 이수 전용이라 주문 불가)
+- [ ] 주문 통보 실측 → 픽스처 `orderEvents.measured=true`, README ⚠️ 주문통보 → ✅
 
 ## Phase E — 다언어 도달 (진행 중)
 

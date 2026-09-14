@@ -10,6 +10,8 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.OrderEvent
+import com.tripleauth.hermetix.broker.OrderEventType
 import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
@@ -82,7 +84,8 @@ class KisApiClient(
         fractionalShares = false,
         serverOpenOrders = false, // 모의 서버가 주문 조회를 제공하지 않음 - 어댑터 내부 추적
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
-        streams = setOf(StreamChannel.TRADES), // H0STCNT0 체결가 — 2026-09 모의 실측
+        // H0STCNT0 체결가·H0STASP0 호가 — 2026-09 모의 실측. H0STCNI9 주문 통보 — 문서 기반 (HTS ID 필요)
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
@@ -409,6 +412,33 @@ class KisApiClient(
     // ------------------------------------------------------------------ stream
 
     override fun openStream(): MarketStream = KisMarketStream(properties, objectMapper, ::approvalKey)
+
+    /**
+     * 주문 통보를 메모리 추적에 반영한다 — 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던 체결 판정을
+     * 통보가 오면 즉시 확정한다. 통보 주문번호는 10자리 0 패딩이라 [OrderEvent.orderIdMatches] 로 맞춘다.
+     */
+    override fun applyOrderEvent(event: OrderEvent) {
+        val entry = trackedOrders.entries.firstOrNull { event.orderIdMatches(it.key) } ?: return
+        val tracked = entry.value
+        val order = tracked.order
+        val updated = when (event.type) {
+            OrderEventType.FILLED -> {
+                val filled = (order.filledQuantity ?: BigDecimal.ZERO) + (event.quantity ?: BigDecimal.ZERO)
+                val total = order.quantity ?: filled
+                order.copy(
+                    filledQuantity = filled,
+                    avgFillPrice = event.price ?: order.avgFillPrice,
+                    status = if (filled >= total) OrderStatus.FILLED else OrderStatus.PARTIALLY_FILLED,
+                    filledAt = if (filled >= total) event.timestamp else order.filledAt,
+                )
+            }
+            OrderEventType.CANCELED -> order.copy(status = OrderStatus.CANCELED, canceledAt = event.timestamp)
+            OrderEventType.REJECTED -> order.copy(status = OrderStatus.REJECTED, rejectReason = event.reason)
+            OrderEventType.ACCEPTED, OrderEventType.MODIFIED -> return
+        }
+        trackedOrders[entry.key] = tracked.copy(order = updated)
+        logger.info { "KIS order event applied / ${entry.key} ${event.type} -> ${updated.status}" }
+    }
 
     /**
      * 웹소켓 접속키 (`POST /oauth2/Approval`). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고

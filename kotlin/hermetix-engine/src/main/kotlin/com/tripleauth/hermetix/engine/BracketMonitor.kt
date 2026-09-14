@@ -1,6 +1,8 @@
 package com.tripleauth.hermetix.engine
 
 import com.tripleauth.hermetix.broker.BrokerClient
+import com.tripleauth.hermetix.broker.OrderEvent
+import com.tripleauth.hermetix.broker.OrderEventType
 import com.tripleauth.hermetix.client.dto.OrderStatus
 import com.tripleauth.hermetix.strategy.Signal
 import com.tripleauth.hermetix.strategy.StrategyContext
@@ -88,6 +90,28 @@ class BracketMonitor(
         }
     }
 
+    /**
+     * 주문 통보로 진입 주문 상태를 바로 반영한다 (서버 조회 없이). 체결은 누적해 주문 수량을 채우면 활성화,
+     * 취소·거부는 폐기. 통보가 없는 브로커에서는 기존처럼 틱마다 [resolveEntry] 가 조회한다.
+     */
+    fun onOrderEvent(event: OrderEvent) {
+        val bracket = brackets.values.firstOrNull { event.orderIdMatches(it.entryOrderId) } ?: return
+        when (event.type) {
+            OrderEventType.FILLED -> {
+                bracket.filledQuantity = bracket.filledQuantity + (event.quantity ?: BigDecimal.ZERO)
+                if (!bracket.active && bracket.filledQuantity >= bracket.quantity) {
+                    bracket.active = true
+                    logger.info { "bracket activated / entry filled by event ${bracket.entryOrderId}" }
+                }
+            }
+            OrderEventType.CANCELED, OrderEventType.REJECTED -> {
+                brackets.remove(bracket.entryOrderId)
+                logger.info { "bracket dropped / entry ${event.type} by event ${bracket.entryOrderId}" }
+            }
+            OrderEventType.ACCEPTED, OrderEventType.MODIFIED -> Unit
+        }
+    }
+
     fun activeCount(): Int = brackets.size
 
     private class Bracket(
@@ -97,5 +121,6 @@ class BracketMonitor(
         val takeProfitPrice: BigDecimal?,
         val stopLossPrice: BigDecimal?,
         @Volatile var active: Boolean = false,
+        @Volatile var filledQuantity: BigDecimal = BigDecimal.ZERO,
     )
 }

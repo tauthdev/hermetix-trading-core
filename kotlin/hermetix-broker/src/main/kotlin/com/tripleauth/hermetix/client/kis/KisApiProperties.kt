@@ -21,6 +21,8 @@ data class KisApiProperties(
     val throttleMillis: Long = 0,
     /** 토큰 만료 전 미리 갱신할 여유 시간(초) */
     val tokenRefreshMarginSeconds: Long = 300,
+    /** HTS ID — 실시간 주문 통보(H0STCNI9/H0STCNI0) 구독 키. 비우면 주문 통보 스트림을 쓰지 않는다 */
+    val htsId: String = "",
     /** 실시간 웹소켓 주소. 비우면 환경에 따라 결정 — 모의 ws://ops.koreainvestment.com:31000, 실전 ws://ops.koreainvestment.com:21000 */
     val wsUrl: String = "",
 ) {

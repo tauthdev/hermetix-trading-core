@@ -2,6 +2,8 @@ package com.tripleauth.hermetix.engine
 
 import com.tripleauth.hermetix.broker.BrokerClient
 import com.tripleauth.hermetix.broker.MarketStream
+import com.tripleauth.hermetix.broker.OrderBookTick
+import com.tripleauth.hermetix.broker.OrderEvent
 import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.TradeTick
@@ -66,6 +68,13 @@ class StrategyEngine(
     /** 심볼(요청 표기) → 마지막 체결 틱 */
     private val latestTrades = ConcurrentHashMap<String, TradeTick>()
 
+    /** 심볼(요청 표기) → 마지막 호가창 (spec.orderBook 전략만) */
+    private val latestOrderBooks = ConcurrentHashMap<String, OrderBookTick>()
+
+    /** 주문 통보 구독 여부 — 한 번만 */
+    @Volatile
+    private var orderEventsAttached = false
+
     /** 전략 이름 → 스케줄 대기 중인 스트림 틱이 있는지 (합치기용) */
     private val pendingTicks = ConcurrentHashMap<String, Boolean>()
 
@@ -116,9 +125,53 @@ class StrategyEngine(
             logger.info { "strategy scheduled / ${strategy.spec.name} symbols=${strategy.spec.symbols} interval=${strategy.spec.pollInterval} trigger=${strategy.spec.trigger}" }
             scheduler.scheduleWithFixedDelay({ tick(strategy) }, strategy.spec.pollInterval)
             if (strategy.spec.trigger == TickTrigger.ON_TRADE) attachStream(strategy)
+            if (strategy.spec.orderBook) attachOrderBook(strategy)
             scheduled += strategy.spec.name
         }
         scheduledStrategies = scheduled
+        attachOrderEvents()
+    }
+
+    /** 브로커가 채널을 제공하면 공유 스트림을 (필요 시 열어) 돌려주고, 아니면 null */
+    private fun streamFor(channel: StreamChannel): MarketStream? {
+        val broker = brokerClient
+        if (broker !is StreamingBrokerClient || channel !in broker.capabilities.streams) return null
+        return stream ?: broker.openStream().also { opened ->
+            stream = opened
+            opened.connect()
+        }
+    }
+
+    /** spec.orderBook 전략의 심볼 호가창을 구독해 컨텍스트로 공급한다. 틱을 촉발하지는 않는다 */
+    private fun attachOrderBook(strategy: TradingStrategy) {
+        val spec = strategy.spec
+        val s = streamFor(StreamChannel.ORDER_BOOK) ?: run {
+            logger.warn { "[${spec.name}] orderBook=true 이지만 브로커 '${brokerClient.capabilities.brokerId}' 는 호가 스트림을 제공하지 않습니다 - 컨텍스트의 orderBook 은 비어 있습니다" }
+            return
+        }
+        s.subscribeOrderBook(spec.symbols) { tick -> latestOrderBooks[tick.symbol] = tick }
+        logger.info { "[${spec.name}] order book stream attached / symbols=${spec.symbols}" }
+    }
+
+    /**
+     * 주문 통보를 구독해 어댑터 추적([StreamingBrokerClient.applyOrderEvent])과 브라켓([BracketMonitor.onOrderEvent])에 반영한다.
+     * 브로커가 제공하면 항상 붙인다 — 구독 실패(KIS HTS ID 미설정 등)는 경고만 남기고 폴링 판정으로 둔다
+     */
+    private fun attachOrderEvents() {
+        if (orderEventsAttached) return
+        val broker = brokerClient as? StreamingBrokerClient ?: return
+        val s = streamFor(StreamChannel.ORDER_EVENTS) ?: return
+        runCatching {
+            s.subscribeOrderEvents { event -> onOrderEvent(broker, event) }
+            orderEventsAttached = true
+            logger.info { "order event stream attached" }
+        }.onFailure { logger.warn { "주문 통보 스트림을 구독하지 못했습니다 - 체결 판정은 폴링으로 계속합니다: ${it.message}" } }
+    }
+
+    private fun onOrderEvent(broker: StreamingBrokerClient, event: OrderEvent) {
+        logger.info { "order event / ${event.type} order=${event.orderId} ${event.symbol ?: ""} ${event.side ?: ""} qty=${event.quantity} price=${event.price}" }
+        runCatching { broker.applyOrderEvent(event) }.onFailure { logger.warn(it) { "applyOrderEvent 실패 / ${event.orderId}" } }
+        runCatching { bracketMonitor.onOrderEvent(event) }.onFailure { logger.warn(it) { "bracket onOrderEvent 실패 / ${event.orderId}" } }
     }
 
     /** ON_TRADE 전략을 체결가 스트림에 붙인다. 브로커가 지원하지 않으면 경고만 남기고 폴링으로 둔다 */
@@ -132,10 +185,7 @@ class StrategyEngine(
             }
             return
         }
-        val s = stream ?: broker.openStream().also { opened ->
-            stream = opened
-            opened.connect()
-        }
+        val s = streamFor(StreamChannel.TRADES) ?: return
         s.subscribeTrades(spec.symbols) { tick ->
             latestTrades[tick.symbol] = tick
             requestTick(strategy)
@@ -227,6 +277,7 @@ class StrategyEngine(
             holdings = holdings,
             openOrders = openOrders,
             buyingPower = buyingPower,
+            orderBooks = if (spec.orderBook) spec.symbols.mapNotNull { sym -> latestOrderBooks[sym]?.let { sym to it } }.toMap() else emptyMap(),
         )
     }
 

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.kotlinModule
 import com.tripleauth.hermetix.broker.KrxCalendar
+import com.tripleauth.hermetix.broker.OrderBookTick
+import com.tripleauth.hermetix.broker.OrderEvent
 import com.tripleauth.hermetix.broker.TradeTick
 import com.tripleauth.hermetix.client.kis.KisMarketStream
 import com.tripleauth.hermetix.client.kiwoom.KiwoomMarketStream
@@ -56,5 +58,60 @@ class StreamFixtureTest {
         assertThat(stream["channel"].asText()).isEqualTo("TRADES")
         val ticks = stream["frames"].flatMap { KiwoomMarketStream.parseReal(objectMapper.readTree(it.asText()), today) }
         assertMatches(ticks, stream["expected"])
+    }
+
+    private fun assertBooks(books: List<OrderBookTick>, expected: JsonNode) {
+        assertThat(books).hasSize(expected.size())
+        books.zip(expected.toList()).forEach { (book, e) ->
+            assertThat(book.symbol).isEqualTo(e["symbol"].asText())
+            assertThat(book.timestamp.atZone(KrxCalendar.KST).toLocalTime().toString()).isEqualTo(e["time"].asText())
+            fun levels(node: JsonNode) = node.map { it["price"].asText() to it["quantity"].asText() }
+            assertThat(book.asks.map { it.price.toPlainString() to it.quantity.toPlainString() }).isEqualTo(levels(e["asks"]))
+            assertThat(book.bids.map { it.price.toPlainString() to it.quantity.toPlainString() }).isEqualTo(levels(e["bids"]))
+            assertThat(book.totalAskQuantity).isEqualByComparingTo(e["totalAskQuantity"].asText())
+            assertThat(book.totalBidQuantity).isEqualByComparingTo(e["totalBidQuantity"].asText())
+        }
+    }
+
+    private fun assertEvents(events: List<OrderEvent>, expected: JsonNode) {
+        assertThat(events).hasSize(expected.size())
+        events.zip(expected.toList()).forEach { (ev, e) ->
+            assertThat(ev.orderId).isEqualTo(e["orderId"].asText())
+            assertThat(ev.type.name).isEqualTo(e["type"].asText())
+            assertThat(ev.timestamp.atZone(KrxCalendar.KST).toLocalTime().toString()).isEqualTo(e["time"].asText())
+            assertThat(ev.symbol).isEqualTo(e["symbol"].asText())
+            assertThat(ev.side?.name).isEqualTo(e["side"].asText())
+            assertThat(ev.quantity).isEqualByComparingTo(e["quantity"].asText())
+            assertThat(ev.price).isEqualByComparingTo(e["price"].asText())
+            if (e.has("remainingQuantity")) assertThat(ev.remainingQuantity).isEqualByComparingTo(e["remainingQuantity"].asText())
+            if (e.has("originalOrderId")) assertThat(ev.originalOrderId).isEqualTo(e["originalOrderId"].asText()) else assertThat(ev.originalOrderId).isNull()
+        }
+    }
+
+    @Test
+    fun `kis - H0STASP0 호가 프레임 (실측)`() {
+        val section = fixture("kis")["orderBook"]
+        assertThat(section["channel"].asText()).isEqualTo("ORDER_BOOK")
+        assertBooks(section["frames"].flatMap { KisMarketStream.parseOrderBookFrame(it.asText(), today) }, section["expected"])
+    }
+
+    @Test
+    fun `kis - H0STCNI9 주문 통보 프레임 (복호화 후 평문, 문서 기반)`() {
+        val section = fixture("kis")["orderEvents"]
+        assertThat(section["measured"].asBoolean()).isFalse()
+        assertEvents(section["frames"].flatMap { KisMarketStream.parseOrderEventFrame(it.asText(), today) }, section["expected"])
+    }
+
+    @Test
+    fun `kiwoom - 0D 호가 프레임 (실측)`() {
+        val section = fixture("kiwoom")["orderBook"]
+        assertBooks(section["frames"].flatMap { KiwoomMarketStream.parseOrderBook(objectMapper.readTree(it.asText()), today) }, section["expected"])
+    }
+
+    @Test
+    fun `kiwoom - 00 주문체결 프레임 (문서 기반)`() {
+        val section = fixture("kiwoom")["orderEvents"]
+        assertThat(section["measured"].asBoolean()).isFalse()
+        assertEvents(section["frames"].flatMap { KiwoomMarketStream.parseOrderEvents(objectMapper.readTree(it.asText()), today) }, section["expected"])
     }
 }

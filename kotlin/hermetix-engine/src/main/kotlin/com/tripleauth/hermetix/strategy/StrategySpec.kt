@@ -23,4 +23,6 @@ data class StrategySpec(
     val trigger: TickTrigger = TickTrigger.POLL,
     /** [TickTrigger.ON_TRADE] 에서 연속 호출 사이의 최소 간격. REST 호출(캔들·계좌) 폭주를 막는다 */
     val minTickInterval: Duration = Duration.ofSeconds(1),
+    /** true 면 심볼의 호가창 스트림을 구독해 [StrategyContext.orderBook] 으로 공급한다 (브로커가 ORDER_BOOK 채널을 선언한 경우만) */
+    val orderBook: Boolean = false,
 )

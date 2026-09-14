@@ -105,7 +105,8 @@ tick(strategy):
 - **트리거 합치기**: 틱은 스트림 스레드에서 오고 tick 은 엔진의 단일 스레드 스케줄러에서 돈다. 전략마다 "대기 중 플래그" 하나 — 대기 중이면 새 틱은 버려지고(마지막 가격은 `latestTrades` 에 남는다), tick 실행 도중 도착한 틱은 종료 후 `minTickInterval` 이 지나면 한 번 더 돌린다. 최소 간격은 실행 직전에 다시 확인한다
 - **폴링 안전망**: ON_TRADE 전략도 `pollInterval` 고정 지연 스케줄은 그대로 유지한다. 스트림이 죽어도 전략은 계속 호출되고, 스트림은 뒤에서 재접속한다
 - **현재가 절약**: 전략의 모든 심볼에 스트림 틱이 있으면 `quotes` REST 호출을 건너뛰고 `TradeTick.toQuote()` 를 쓴다. 캔들·계좌·보유·미체결·매수가능은 여전히 REST — 틱당 REST 호출 수는 `1 + 심볼 수 + 3`
-- **브로커별 프로토콜** (2026-09-14 모의 장중 실측): KIS 는 `POST /oauth2/Approval` 접속키 → `ws://ops.koreainvestment.com:31000`(모의)/`:21000`(실전) → JSON 구독(`H0STCNT0`) → `0|TR|건수|필드^필드…` 프레임(레코드 폭 47, 한 프레임에 최대 3건), `PINGPONG` 에코. 키움은 REST 토큰으로 `wss://mockapi.kiwoom.com:10000/api/dostk/websocket` LOGIN → `REG`(type `0B`) → `{"trnm":"REAL"}` JSON, `PING` 에코. 프레임 샘플과 기대값은 `conformance/fixtures/{kis,kiwoom}.json#stream`
+- **채널**: 체결가(TRADES, 전략 트리거·현재가), 호가(ORDER_BOOK, `StrategySpec.orderBook=true` 전략의 `StrategyContext.orderBook()`), 주문통보(ORDER_EVENTS, 브로커가 제공하면 엔진이 자동 구독 → `StreamingBrokerClient.applyOrderEvent` 로 어댑터 추적 갱신 + `BracketMonitor.onOrderEvent` 로 진입 체결 즉시 활성화·취소 시 폐기). 호가는 틱을 촉발하지 않는다
+- **브로커별 프로토콜** (2026-09-14 모의 장중 실측 — 체결가·호가. 주문통보는 문서 기반): KIS 는 `POST /oauth2/Approval` 접속키 → `ws://ops.koreainvestment.com:31000`(모의)/`:21000`(실전) → JSON 구독(`H0STCNT0`) → `0|TR|건수|필드^필드…` 프레임(체결가 폭 47, 한 프레임에 최대 3건 / 호가 `H0STASP0` 폭 63), 주문통보 `H0STCNI9`(모의)/`H0STCNI0`(실전)는 tr_key 가 HTS ID 이고 프레임이 AES-256-CBC 암호문(구독 응답 `output.key/iv` 로 복호화), `PINGPONG` 에코. 키움은 REST 토큰으로 `wss://mockapi.kiwoom.com:10000/api/dostk/websocket` LOGIN → `REG`(type `0B` 체결 / `0D` 호가 / `00` 주문체결 — 주문체결은 item 빈 문자열) → `{"trnm":"REAL"}` JSON, `PING` 에코. 프레임 샘플과 기대값은 `conformance/fixtures/{kis,kiwoom}.json#stream`
 - **넥스트증권**: 공개 스펙 v1.3 에 웹소켓이 없다 — `streams` 미선언, 폴링만
 
 ## 주문 실행 (OrderExecutor)
@@ -204,7 +205,7 @@ BrokerApiException (기반)
 | | next | kis | kiwoom | nh ⚠️ | db ⚠️ | ls ⚠️ | toss ⚠️ 실전 전용 | kb ⚠️ 실전 전용 |
 |---|---|---|---|---|---|---|---|---|
 | 인증 | OAuth client_credentials, 토큰 12h (v1.3) | appkey/appsecret → 토큰 24h (발급 1회/분 제한) | appkey/secretkey → 토큰 (expires_dt) | appkey/secret → 토큰 24h (운영 호스트 전용 발급, 쿼리스트링) | appkey/secret → 토큰 24h (form, 발급 1분 1건) | appkey/secret → 토큰 (form, 익일 07시 만료) | client_id/secret → 토큰 24h (client 당 유효 토큰 1개, 재발급 시 이전 토큰 무효) | appKey/appSecret → 토큰 (dataHeader/dataBody 봉투) |
-| 실시간 | 없음 (스펙 미제공) | 웹소켓 체결가 `H0STCNT0` (접속키 `/oauth2/Approval`, `ws://ops…:31000`) ✅ 모의 실측 (2026-09) | 웹소켓 체결가 `0B` (`wss://mockapi…:10000/api/dostk/websocket`, 토큰 LOGIN) ✅ 모의 실측 (2026-09) | 미구현 (WS 27채널 제공) | 미구현 (WS :17070 제공) | 미구현 (WS 116 TR 제공) | 미구현 (AsyncAPI 제공) | 미구현 (WS 미확인) |
+| 실시간 | 없음 (스펙 미제공) | 웹소켓 체결가 `H0STCNT0`·호가 `H0STASP0` ✅ 모의 실측 (2026-09), 주문통보 `H0STCNI9/0` ⚠️ 문서 기반(HTS ID·AES) | 웹소켓 체결 `0B`·호가 `0D` ✅ 모의 실측 (2026-09), 주문체결 `00` ⚠️ 문서 기반 | 미구현 (WS 27채널 제공) | 미구현 (WS :17070 제공) | 미구현 (WS 116 TR 제공) | 미구현 (AsyncAPI 제공) | 미구현 (WS 미확인) |
 | 레이트리밋 | 그룹별 초당 제한, 429 + `Retry-After` (어댑터 자동 재시도 없음 — 엔진이 다음 틱까지 대기) | 초당 제한 → 600ms 쓰로틀 + EGW00201 재시도 | TR당 초당 1회 → 1100ms 쓰로틀 + 재시도 | 초당 5회 → 250ms 쓰로틀 + 429 재시도 | 앱 20 TPS·잔고 2·예수금 1 TPS → 500ms 쓰로틀 + IGW00201 지수 백오프 | TR 별 1~10 TPS → 전역 500ms + 차트(t8410) 전용 1100ms 쓰로틀 | 429 + `Retry-After` → 200ms 쓰로틀 + 지수 백오프 | 5초당 200건(추정) → 100ms 쓰로틀 + 재시도 |
 | 캔들 | 1m/1d (v1.3) | 1d (분봉 API 가 당일 한정이라 미지원) | 1d | 1d (currentDaily) | 1d (kr-chart/day) | 1d (t8410) | 1m/1d (`/candles`, 최대 200) | 1d (ivs11560, 시장구분 설정 필요) |
 | 캘린더 | 서버 제공 (미국장) | KRX 합성 (공휴일 미반영) | KRX 합성 | KRX 합성 | KRX 합성 | KRX 합성 | KRX 합성 (미국 종목도 KRX 캘린더로 틱) | KRX 합성 |
@@ -239,6 +240,6 @@ Python `RateLimiter`, JS `RateLimiter`, Go `rateLimiter` 가 같은 의미다.
 ## 알려진 한계 요약
 
 - 브라켓/전략 상태의 메모리 휘발성 (위 상태 지도 참조)
-- 호가 스냅샷 기반 — L2 오더북 없음. 실시간은 체결가 채널만(kis·kiwoom, 0.8.0, 모의 실측) — 호가·체결통보 스트림은 미구현이라 그 사이의 호가 변화는 못 본다
+- 실시간은 kis·kiwoom 만 — 체결가·10단계 호가는 모의 실측, 주문통보는 문서 기반(실측 전). 다른 브로커는 폴링 스냅샷이라 틱 사이의 변화를 못 본다
 - 정규장 판정은 캘린더 API 기준 — 프리/애프터마켓 주문은 `regularHoursOnly=false` 로 가능하나 체결 규칙은 서버 정책을 따른다
 - 단일 계좌 전제 — 전략 여러 개가 같은 심볼을 다루면 보유/미체결 판단이 겹친다 (전략 가이드에서 금지 권고)

@@ -76,7 +76,8 @@ class KiwoomApiClient(
         nativeBracket = false,
         fractionalShares = false,
         environments = setOf(TradingEnvironment.PAPER, TradingEnvironment.LIVE),
-        streams = setOf(StreamChannel.TRADES), // 0B 주식체결 — 2026-09 모의 실측
+        // 0B 주식체결·0D 호가 — 2026-09 모의 실측. 00 주문체결 — 문서 기반 (통보 프레임 실측 전)
+        streams = setOf(StreamChannel.TRADES, StreamChannel.ORDER_BOOK, StreamChannel.ORDER_EVENTS),
     )
 
     override val environment: TradingEnvironment = properties.environment
