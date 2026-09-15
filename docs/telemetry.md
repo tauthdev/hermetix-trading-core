@@ -1,0 +1,119 @@
+# 사용량 텔레메트리 (Usage Telemetry) — 계약 v1
+
+Hermetix SDK(Kotlin·Python·JS·Go)는 **어느 증권사가 얼마나 쓰이는지**를 집계해 `hermetix-service` 로 보내고, 그 데이터로 [증권사 사용량 랭킹](https://github.com/tauthdev/hermetix-service)을 공개합니다. OpenRouter 의 모델 랭킹이 실사용량으로 만들어지듯, 국내외 증권사 오픈 API 가 실제로 어떻게 쓰이는지를 보여주는 데이터입니다.
+
+이 문서는 네 언어 SDK 와 서버가 공유하는 **유일한 계약**입니다. 페이로드 필드·값의 의미·전송 규칙을 바꾸려면 여기부터 고치고 `schema` 를 올립니다.
+
+## 원칙
+
+1. **매매 경로와 완전히 분리** — 집계는 메모리 카운터, 전송은 백그라운드 스레드. 전송 실패·타임아웃·서버 장애는 조용히 버리고 큐를 쌓지 않는다. 텔레메트리 때문에 주문이 늦어지거나 실패하는 일은 없다
+2. **개인정보·매매 내용은 한 바이트도 보내지 않는다** — 아래 "보내지 않는 것" 은 코드 리뷰의 거부 조건이다
+3. **합산만 보낸다** — 개별 호출을 보내지 않고 시간(hour) 버킷으로 합산한 건수·분포만 보낸다
+4. **기본 배포본은 항상 켜져 있다** — 끄는 설정은 없다. 대신 무엇을 보내는지 이 문서와 README 에 그대로 공개한다. (MIT 라 지우고 쓰는 것은 사용자 자유)
+5. **새 의존성 없음** — 각 언어의 내장 HTTP 클라이언트만 쓴다
+
+## 보내는 것 / 보내지 않는 것
+
+| 보내는 것 | 보내지 않는 것 |
+|---|---|
+| 브로커 ID (`kis`, `toss` …) | 종목 코드·이름 |
+| 환경 (`PAPER` / `LIVE`) | 수량·가격·금액 |
+| 호출 종류별 성공/에러 건수 (시간 버킷 합계) | 주문번호·체결번호·계좌번호·고객 ID |
+| 에러 분류 (레이트리밋·인증·휴장·자금부족·주문거부·미존재·네트워크·기타) | API 키·토큰·HTS ID |
+| 응답 시간 분포 (p50·p95·count, ms) | 전략 이름·설정값 |
+| 실시간 채널별 구독 수·수신 메시지 수·재접속 수 | IP 주소 (서버가 저장하지 않음) |
+| SDK 언어·버전 | OS·호스트명·사용자명 |
+| 설치 단위 무작위 ID (`~/.hermetix/installation-id` 의 UUID) | |
+
+## 페이로드 (`POST {endpoint}` · `Content-Type: application/json`)
+
+```json
+{
+  "schema": 1,
+  "installationId": "3f1c…-uuid",
+  "sdk": { "language": "kotlin", "version": "0.11.0" },
+  "sentAt": "2026-09-15T01:02:03Z",
+  "buckets": [
+    {
+      "hour": "2026-09-15T01:00:00Z",
+      "broker": "kis",
+      "environment": "PAPER",
+      "ops": [
+        { "op": "quotes",       "ok": 118, "errors": { "rate_limit": 2 }, "latencyMs": { "count": 120, "p50": 84, "p95": 230 } },
+        { "op": "create_order", "ok": 3,   "errors": {},                  "latencyMs": { "count": 3,   "p50": 140, "p95": 310 } }
+      ],
+      "streams": [
+        { "channel": "TRADES",       "subscriptions": 2, "messages": 15230 },
+        { "channel": "ORDER_EVENTS", "subscriptions": 1, "messages": 4 }
+      ],
+      "reconnects": 1
+    }
+  ]
+}
+```
+
+### 필드
+
+| 필드 | 값 | 비고 |
+|---|---|---|
+| `schema` | `1` | 계약 버전. 호환 안 되는 변경 시 증가 |
+| `installationId` | UUID v4 문자열 | 최초 실행 시 생성해 `~/.hermetix/installation-id` 에 저장. 파일을 못 쓰면 프로세스 수명 동안만 유지되는 임시 ID |
+| `sdk.language` | `kotlin` \| `python` \| `js` \| `go` | |
+| `sdk.version` | 패키지 버전 문자열 | |
+| `sentAt` | ISO-8601 UTC | 전송 시각 |
+| `buckets[].hour` | ISO-8601 UTC, 분·초 0 | 집계 버킷. 한 페이로드에 여러 시간·브로커 버킷이 올 수 있다 |
+| `buckets[].broker` | 브로커 ID | `BrokerCapabilities.brokerId` |
+| `buckets[].environment` | `PAPER` \| `LIVE` | |
+| `ops[].op` | 아래 표 | REST 호출 종류 |
+| `ops[].ok` / `errors` | 정수 / 분류→정수 | `errors` 는 0 인 분류를 생략해도 된다 |
+| `ops[].latencyMs` | `count`, `p50`, `p95` | 성공·실패 모두 포함한 응답 시간. 표본은 op 당 최근 256개까지만 보관해 계산 |
+| `streams[].channel` | `TRADES` \| `ORDER_BOOK` \| `ORDER_EVENTS` | |
+| `streams[].subscriptions` | 정수 | 그 시간 버킷에 보낸 구독(등록) 수 |
+| `streams[].messages` | 정수 | 리스너에 전달한 틱/이벤트 수 |
+| `buckets[].reconnects` | 정수 | 웹소켓 재접속 횟수 |
+
+### `op` 값
+
+`quotes` `candles` `calendar` `account` `holdings` `buying_power` `create_order` `get_orders` `get_order` `cancel_order` `fills` `auth`
+
+`auth` 는 토큰·접속키 발급 호출. 어댑터 내부의 보조 조회(예: KIS 가 주문 추적을 위해 부르는 잔고 조회)는 바깥 op 에 포함되며 따로 세지 않는다.
+
+### 에러 분류
+
+| 분류 | 조건 |
+|---|---|
+| `rate_limit` | RateLimitError |
+| `auth` | AuthError |
+| `market_closed` | MarketClosedError |
+| `insufficient_funds` | InsufficientFundsError |
+| `invalid_order` | InvalidOrderError |
+| `order_not_found` | OrderNotFoundError |
+| `network` | 연결·타임아웃 등 HTTP 응답을 받지 못한 경우 |
+| `other` | 그 외 모든 예외 |
+
+## 전송 규칙
+
+- 첫 전송은 프로세스 시작 **60초 후**, 이후 **60초마다**. 버킷이 비어 있으면 보내지 않는다
+- 프로세스 종료 시 남은 버킷을 한 번 더 보내려 시도한다 (최대 2초, 실패 무시)
+- HTTP 타임아웃 연결 2초·전체 3초. 재시도 없음. 응답 본문은 읽지 않는다. 2xx 가 아니어도 버린다
+- 전송 후 카운터는 비운다. 실패한 페이로드는 다시 보내지 않는다 (누락은 허용, 중복은 없음)
+- 시간 버킷은 UTC 정시 기준. 전송 시점에 현재 진행 중인 시간 버킷도 포함해 보낸다 (서버는 같은 `installationId`+`hour`+`broker`+`environment` 를 **더해서** 집계한다)
+- 엔드포인트 기본값은 `https://service.hermetix.dev/v1/usage`. 언어별로 상수 한 곳에만 있으며 사용자 설정은 없다
+- 사용자 에이전트: `hermetix-{language}/{version}`
+
+## 서버 (`hermetix-service`) 처리
+
+- `POST /v1/usage` — 본문 검증 후 `usage_bucket` 에 upsert (같은 키면 건수 합산, 지연 분포는 count 가중 평균으로 병합). 응답 `202` 빈 본문. 본문 256KB 초과·`schema` 미지원은 `400`
+- IP 는 로그에도 남기지 않는다. `installationId` 는 설치 수 집계에만 쓰고 랭킹 API 로 노출하지 않는다
+- 랭킹 API: `GET /v1/rankings?period=7d|30d` — 브로커별 호출량·실전 비율·에러율·p50/p95, 언어별 비중, 채널별 스트림 사용량, 설치 수. 정적 페이지가 이 JSON 을 그린다
+
+## SDK 구현 위치
+
+| 언어 | 코어 | 계측 지점 |
+|---|---|---|
+| Kotlin | `hermetix-broker` `broker/UsageTelemetry.kt` | 각 어댑터의 공개 메서드(`usage.measure("quotes") { … }`), `ReconnectingWebSocket`(재접속)·각 스트림(구독·메시지) |
+| Python | `hermetix/telemetry.py` | `BrokerClient.__init_subclass__` 로 공개 메서드 자동 계측, 스트림 공용 부품 |
+| JS | `src/telemetry.ts` | 어댑터 생성자에서 공개 메서드 자동 계측, 스트림 공용 부품 |
+| Go | `telemetry.go` | 각 어댑터 메서드의 `defer usage.Measure(...)`, 스트림 공용 부품 |
+
+버전 0.11.0 부터 적용.

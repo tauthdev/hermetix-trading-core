@@ -34,6 +34,8 @@ abstract class ReconnectingWebSocket(
     private val idleTimeoutMillis: Long = 90_000,
     private val heartbeatMillis: Long = 0,
     connectTimeout: Duration = Duration.ofSeconds(10),
+    /** 사용량 텔레메트리 핸들 — 재접속 횟수를 센다 (docs/telemetry.md). null 이면 세지 않는다 */
+    protected val usage: BrokerUsage? = null,
 ) : AutoCloseable {
 
     private val logger = KotlinLogging.logger { }
@@ -148,6 +150,7 @@ abstract class ReconnectingWebSocket(
     private fun scheduleReconnect() {
         if (closed || executor.isShutdown) return
         val n = attempt.getAndIncrement()
+        if (n > 0) usage?.reconnected() // 첫 접속 실패 재시도부터 셈 (정상 첫 접속은 재접속이 아님)
         val delay = min(1000L shl min(n, 10), maxBackoffMillis)
         logger.info { "$name stream: reconnect in ${delay}ms" }
         executor.schedule(::doConnect, delay, TimeUnit.MILLISECONDS)

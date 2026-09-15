@@ -18,3 +18,12 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("io.mockk:mockk:1.13.13")
 }
+
+// SDK 버전을 리소스로 — UsageTelemetry 가 sdk.version 으로 보낸다 (docs/telemetry.md)
+val generateVersionResource by tasks.registering {
+    val outDir = layout.buildDirectory.dir("generated/hermetix-version")
+    outputs.dir(outDir)
+    inputs.property("version", project.version.toString())
+    doLast { outDir.get().file("hermetix-version.txt").asFile.apply { parentFile.mkdirs(); writeText(project.version.toString()) } }
+}
+sourceSets.main { resources.srcDir(generateVersionResource) }

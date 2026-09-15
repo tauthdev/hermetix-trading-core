@@ -17,6 +17,7 @@ import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -90,6 +91,9 @@ class KisApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     /** 어댑터 내부 주문 추적 (모의 서버가 주문 조회 미제공) */
     private val trackedOrders = java.util.concurrent.ConcurrentHashMap<String, TrackedOrder>()
 
@@ -109,7 +113,7 @@ class KisApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val output = call(
                 HttpMethod.GET, "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
@@ -131,7 +135,7 @@ class KisApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) {
             "KIS 어댑터는 일봉(DAY_1)만 지원합니다. 분/시간봉 API 는 당일 데이터만 제공되어 lookback 전략에 사용할 수 없습니다."
         }
@@ -167,11 +171,11 @@ class KisApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val summary = balance().path("output2").firstOrNull()
             ?: throw BrokerApiException(200, null, "KIS 잔고 요약(output2)이 비어 있습니다")
 
@@ -185,7 +189,7 @@ class KisApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balance().path("output1")
             .filter { it.path("hldg_qty").asText("0").toBigDecimal() > BigDecimal.ZERO }
             .map { row ->
@@ -202,7 +206,7 @@ class KisApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val output = call(
             HttpMethod.GET, "/uapi/domestic-stock/v1/trading/inquire-psbl-order", properties.tr("TTC8908R"),
             query = accountParams() + mapOf(
@@ -220,7 +224,7 @@ class KisApiClient(
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) {
             "KIS 어댑터는 LIMIT/MARKET 주문만 지원합니다"
         }
@@ -258,18 +262,18 @@ class KisApiClient(
         return order
     }
 
-    override fun getOrders(): OrdersResponse {
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
         refreshTrackedOrders()
         return OrdersResponse(trackedOrders.values.filter { it.order.status.isOpen }.map { it.order })
     }
 
-    override fun getOrder(orderId: String): OrderResponse {
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
         refreshTrackedOrders()
         return trackedOrders[orderId]?.order
             ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED) // 추적 밖(재시작 등) - 알 수 없어 취소로 간주
     }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         // 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
         call(
             HttpMethod.POST, "/uapi/domestic-stock/v1/trading/order-rvsecncl", properties.tr("TTC0803U"),
@@ -289,7 +293,7 @@ class KisApiClient(
         return canceled
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         // 모의 서버가 체결 내역 조회를 제공하지 않는다 - 추적 주문 중 체결 판정된 것으로 근사
         refreshTrackedOrders()
         val fills = trackedOrders.values
@@ -411,7 +415,7 @@ class KisApiClient(
 
     // ------------------------------------------------------------------ stream
 
-    override fun openStream(): MarketStream = KisMarketStream(properties, objectMapper, ::approvalKey)
+    override fun openStream(): MarketStream = KisMarketStream(properties, objectMapper, ::approvalKey, usage)
 
     /**
      * 주문 통보를 메모리 추적에 반영한다 — 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던 체결 판정을
@@ -444,7 +448,7 @@ class KisApiClient(
      * 웹소켓 접속키 (`POST /oauth2/Approval`). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고
      * 문서상 유효기간이 명시돼 있지 않다. 필드명이 REST 토큰(`appsecret`)과 달리 `secretkey` 인 점에 주의.
      */
-    internal fun approvalKey(): String {
+    internal fun approvalKey(): String = usage.measure("auth") {
         limiter.throttle()
         val node = restClient.post()
             .uri("/oauth2/Approval")
@@ -473,7 +477,7 @@ class KisApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
             return cached.first

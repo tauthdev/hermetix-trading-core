@@ -1,7 +1,9 @@
 package com.tripleauth.hermetix.client.kis
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.tripleauth.hermetix.broker.BrokerUsage
 import com.tripleauth.hermetix.broker.KrxCalendar
+import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.MarketStream
 import com.tripleauth.hermetix.broker.MarketSymbol
 import com.tripleauth.hermetix.broker.OrderBookLevel
@@ -54,7 +56,8 @@ class KisMarketStream(
     private val properties: KisApiProperties,
     private val objectMapper: ObjectMapper,
     private val approvalKey: () -> String,
-) : ReconnectingWebSocket("kis"), MarketStream {
+    usage: BrokerUsage? = null,
+) : ReconnectingWebSocket("kis", usage = usage), MarketStream {
 
     private val logger = KotlinLogging.logger { }
 
@@ -83,6 +86,7 @@ class KisMarketStream(
 
     override fun subscribeTrades(symbols: List<String>, listener: TradeListener) {
         val newCodes = register(symbols, listener, tradeListeners)
+        usage?.streamSubscribed(StreamChannel.TRADES, newCodes.size)
         if (newCodes.isNotEmpty() && isSocketOpen) {
             val key = approvalKey()
             newCodes.forEach { send(subscribeMessage(key, TR_TRADE, it)) }
@@ -91,6 +95,7 @@ class KisMarketStream(
 
     override fun subscribeOrderBook(symbols: List<String>, listener: OrderBookListener) {
         val newCodes = register(symbols, listener, bookListeners)
+        usage?.streamSubscribed(StreamChannel.ORDER_BOOK, newCodes.size)
         if (newCodes.isNotEmpty() && isSocketOpen) {
             val key = approvalKey()
             newCodes.forEach { send(subscribeMessage(key, TR_ORDER_BOOK, it)) }
@@ -101,6 +106,7 @@ class KisMarketStream(
         check(properties.htsId.isNotBlank()) { "KIS 주문 통보 구독에는 HTS ID 가 필요합니다 (hermetix.kis.hts-id)" }
         val first = orderListeners.isEmpty()
         orderListeners += listener
+        if (first) usage?.streamSubscribed(StreamChannel.ORDER_EVENTS)
         if (first && isSocketOpen) send(subscribeMessage(approvalKey(), trOrderEvents, properties.htsId))
     }
 
@@ -161,16 +167,19 @@ class KisMarketStream(
         val plain = "0|$trId|${parts[2]}|$body"
         when (trId) {
             TR_TRADE -> parseFrame(plain).forEach { tick ->
+                usage?.streamMessage(StreamChannel.TRADES)
                 val symbol = requestedSymbols[tick.symbol] ?: tick.symbol
                 val out = if (symbol == tick.symbol) tick else tick.copy(symbol = symbol)
                 tradeListeners[tick.symbol]?.forEach { l -> runCatching { l.onTrade(out) }.onFailure { logger.error(it) { "kis stream: 리스너 오류 / $symbol" } } }
             }
             TR_ORDER_BOOK -> parseOrderBookFrame(plain).forEach { tick ->
+                usage?.streamMessage(StreamChannel.ORDER_BOOK)
                 val symbol = requestedSymbols[tick.symbol] ?: tick.symbol
                 val out = if (symbol == tick.symbol) tick else tick.copy(symbol = symbol)
                 bookListeners[tick.symbol]?.forEach { l -> runCatching { l.onOrderBook(out) }.onFailure { logger.error(it) { "kis stream: 호가 리스너 오류 / $symbol" } } }
             }
             TR_ORDER_EVENTS_PAPER, TR_ORDER_EVENTS_LIVE -> parseOrderEventFrame(plain).forEach { event ->
+                usage?.streamMessage(StreamChannel.ORDER_EVENTS)
                 orderListeners.forEach { l -> runCatching { l.onOrderEvent(event) }.onFailure { logger.error(it) { "kis stream: 주문 통보 리스너 오류 / ${event.orderId}" } } }
             }
             else -> logger.debug { "kis stream: unknown tr $trId" }
