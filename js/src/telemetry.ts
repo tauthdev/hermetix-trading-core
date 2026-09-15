@@ -6,7 +6,7 @@
  * - 개인정보·매매 내용 없음: 브로커·환경·호출 종류·건수·에러 분류·응답 시간 분포·스트림 건수·SDK 버전·설치 ID 뿐
  * - 기본 배포본은 항상 켜져 있다 (설정 없음). 테스트는 `transport` 와 `flushNow()` 로 전송을 가로챈다
  */
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -20,6 +20,17 @@ import type { StreamChannel, TradingEnvironment } from "./models.js";
 export const TELEMETRY_ENDPOINT = "https://service.hermetix.dev/v1/usage";
 export const TELEMETRY_SCHEMA = 1;
 export const SDK_LANGUAGE = "js";
+/** 요청 서명 키 (docs/telemetry.md "요청 서명") — 공개 SDK 라 비밀이 아니며 스팸·스캐너를 거르는 문턱이다 */
+export const SIGNING_KEY_ID = "v1";
+export const SIGNING_KEY = "d97f20cb942540462ea83648ee30a9786bd658b3dc813f74ef011845da258503";
+/** 전송 대상 — 테스트에서만 `__setEndpointForTests` 로 바꾼다 (사용자 설정 없음) */
+let endpoint: string = TELEMETRY_ENDPOINT;
+export function __setEndpointForTests(url: string | null): void { endpoint = url ?? TELEMETRY_ENDPOINT; }
+
+/** `hex(HMAC-SHA256(key, timestamp + "\n" + body))` — 계약의 요청 서명 */
+export function signTelemetry(body: string, timestampSeconds: number): string {
+  return createHmac("sha256", SIGNING_KEY).update(`${timestampSeconds}\n${body}`, "utf8").digest("hex");
+}
 const FLUSH_INTERVAL_MS = 60_000;
 const LATENCY_SAMPLES = 256;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -127,9 +138,16 @@ async function postDefault(body: string): Promise<void> {
   const t = setTimeout(() => controller.abort(), 3_000);
   t.unref?.();
   try {
-    await fetch(TELEMETRY_ENDPOINT, {
+    const timestamp = Math.floor(Date.now() / 1000);
+    await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": `hermetix-${SDK_LANGUAGE}/${UsageTelemetry.sdkVersion}` },
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": `hermetix-${SDK_LANGUAGE}/${UsageTelemetry.sdkVersion}`,
+        "X-Hermetix-Key-Id": SIGNING_KEY_ID,
+        "X-Hermetix-Timestamp": String(timestamp),
+        "X-Hermetix-Signature": signTelemetry(body, timestamp),
+      },
       body,
       signal: controller.signal,
     });

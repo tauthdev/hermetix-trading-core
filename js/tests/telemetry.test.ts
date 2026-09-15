@@ -1,6 +1,9 @@
 /** 사용량 텔레메트리 — 계약(docs/telemetry.md)대로 합산·분류·직렬화되고, 전송 실패가 호출자에게 새지 않는지 (Kotlin UsageTelemetryTest 대응). */
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { KisMarketStream } from "../src/brokers/kisStream.js";
 import {
@@ -8,7 +11,7 @@ import {
   MarketClosedError, NextClient, NhClient, OrderNotFoundError, RateLimitError, TossClient, verifyBrokerConformance,
 } from "../src/index.js";
 import type { BrokerClient, TradeTick } from "../src/index.js";
-import { BrokerUsage, UsageTelemetry, classifyError, instrumentBroker } from "../src/telemetry.js";
+import { BrokerUsage, SIGNING_KEY, SIGNING_KEY_ID, UsageTelemetry, __setEndpointForTests, classifyError, instrumentBroker, signTelemetry } from "../src/telemetry.js";
 import { Queue, withServer } from "./wsHarness.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -225,3 +228,44 @@ test("스트림 구독·메시지가 어댑터의 usage 핸들로 쌓인다 (KIS
     assert.equal(streams.ORDER_BOOK.subscriptions, 1);
     assert.equal(streams.ORDER_BOOK.messages, 0);
   }));
+
+test("요청 서명은 계약대로 HMAC-SHA256(key, timestamp + 개행 + body) 의 소문자 hex 다", () => {
+  const body = '{"schema":1}';
+  const sig = signTelemetry(body, 1_700_000_000);
+  assert.equal(sig, "c0ce56d2a2b120597403cc70160e8db7ae60d242916857319ecc5845522739d2"); // 계약 벡터 (Kotlin 과 동일)
+  assert.match(sig, /^[0-9a-f]{64}$/);
+  assert.equal(sig, createHmac("sha256", SIGNING_KEY).update(`1700000000\n${body}`).digest("hex"));
+  assert.notEqual(signTelemetry(body, 1_700_000_001), sig);
+  assert.equal(SIGNING_KEY_ID, "v1");
+});
+
+test("기본 전송은 서명 헤더 3개를 싣고 본문을 그대로 보낸다", async () => {
+  const received: { headers: Record<string, string | string[] | undefined>; body: string }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => { received.push({ headers: req.headers, body }); res.statusCode = 202; res.end(); });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const originalTransport = UsageTelemetry.transport;
+  try {
+    __setEndpointForTests(`http://127.0.0.1:${port}/v1/usage`);
+    UsageTelemetry.drain();
+    new BrokerUsage("kis", "PAPER").measure("quotes", () => 1);
+    await UsageTelemetry.flushNow(); // transport 는 기본(postDefault) 그대로
+    assert.equal(received.length, 1);
+    const { headers, body } = received[0];
+    assert.equal(headers["x-hermetix-key-id"], "v1");
+    const ts = Number(headers["x-hermetix-timestamp"]);
+    assert.ok(Math.abs(ts - Date.now() / 1000) < 60);
+    assert.equal(headers["x-hermetix-signature"], signTelemetry(body, ts));
+    assert.equal(headers["content-type"], "application/json");
+    assert.match(String(headers["user-agent"]), /^hermetix-js\//);
+    assert.equal((JSON.parse(body) as Payload).buckets[0].ops[0].op, "quotes");
+  } finally {
+    UsageTelemetry.transport = originalTransport;
+    __setEndpointForTests(null);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

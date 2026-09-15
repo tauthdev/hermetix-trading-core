@@ -42,7 +42,7 @@ export {
 export type { BrokerClient, MarketStream, OrderBookListener, OrderEventListener, StreamingBrokerClient, TradeListener } from "./broker.js";
 export { RateLimiter, Throttle, isStreamingBrokerClient, krxTickRound } from "./broker.js";
 export { ReconnectingWebSocket } from "./stream.js";
-export { BrokerUsage, UsageTelemetry, TELEMETRY_ENDPOINT, classifyError, instrumentBroker } from "./telemetry.js";
+export { BrokerUsage, UsageTelemetry, TELEMETRY_ENDPOINT, classifyError, instrumentBroker, SIGNING_KEY, SIGNING_KEY_ID, signTelemetry } from "./telemetry.js";
 export type { ErrorClass } from "./telemetry.js";
 export { verifyBrokerConformance } from "./testing.js";
 export type { ConformanceReport, ConformanceScenario } from "./testing.js";
