@@ -342,6 +342,7 @@ SDK 는 **어느 증권사가 얼마나 쓰이는지**를 시간 단위로 합�
 - 매매 경로와 분리돼 있습니다. 카운터는 메모리, 전송은 60초마다 백그라운드 고루틴. 실패·타임아웃은 조용히 버리고 재전송하지 않습니다
 - Go 에는 종료 훅이 없으므로 프로세스가 끝나기 전에 `hermetix.FlushTelemetry()` 를 부르면 남은 버킷이 나갑니다. `StrategyEngine.Stop()` 이 자동으로 부릅니다
 - 테스트에서는 `hermetix.TelemetryTransport` 를 바꿔 전송을 가로챌 수 있습니다
+- 모든 전송은 계약의 요청 서명(`X-Hermetix-Key-Id`·`X-Hermetix-Timestamp`·`X-Hermetix-Signature`, HMAC-SHA256)을 싣습니다 — 공개 SDK 라 비밀은 아니며 스팸·스캐너를 거르는 문턱입니다 ([계약 문서](../docs/telemetry.md) "요청 서명")
 
 ## 문서
 

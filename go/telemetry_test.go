@@ -7,7 +7,10 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -347,4 +350,66 @@ func TestTelemetryCountsStreamSubscriptionsAndMessages(t *testing.T) {
 		}
 	}
 	t.Fatal("TRADES 스트림 통계가 없다")
+}
+
+// 요청 서명 — 계약 검증 벡터(네 언어 공용)와 일치하고, 타임스탬프가 바뀌면 서명도 바뀐다
+func TestTelemetrySignatureMatchesContractVector(t *testing.T) {
+	body := []byte(`{"schema":1}`)
+	sig := SignTelemetry(body, 1700000000)
+	if sig != "c0ce56d2a2b120597403cc70160e8db7ae60d242916857319ecc5845522739d2" {
+		t.Fatalf("signature mismatch: %s", sig)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(sig) {
+		t.Fatalf("signature must be lowercase hex 64: %s", sig)
+	}
+	if SignTelemetry(body, 1700000001) == sig {
+		t.Fatal("signature must change with timestamp")
+	}
+}
+
+// 기본 전송은 서명 헤더 3개를 싣는다
+func TestTelemetryDefaultTransportSendsSignatureHeaders(t *testing.T) {
+	type captured struct {
+		keyID, timestamp, signature, body string
+	}
+	got := make(chan captured, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		got <- captured{
+			keyID:     r.Header.Get("X-Hermetix-Key-Id"),
+			timestamp: r.Header.Get("X-Hermetix-Timestamp"),
+			signature: r.Header.Get("X-Hermetix-Signature"),
+			body:      string(raw),
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	original := telemetryEndpoint
+	telemetryEndpoint = server.URL
+	defer func() { telemetryEndpoint = original }()
+
+	body := []byte(`{"schema":1,"buckets":[]}`)
+	before := time.Now().Unix()
+	if err := telemetryPost(body); err != nil {
+		t.Fatalf("post failed: %v", err)
+	}
+	select {
+	case c := <-got:
+		if c.keyID != TelemetrySigningKeyID {
+			t.Fatalf("key id: %q", c.keyID)
+		}
+		ts, err := strconv.ParseInt(c.timestamp, 10, 64)
+		if err != nil || ts < before || ts > time.Now().Unix() {
+			t.Fatalf("timestamp not current unix seconds: %q", c.timestamp)
+		}
+		if c.body != string(body) {
+			t.Fatalf("body altered: %q", c.body)
+		}
+		if c.signature != SignTelemetry(body, ts) {
+			t.Fatalf("signature does not verify against sent timestamp+body")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("request not received")
+	}
 }

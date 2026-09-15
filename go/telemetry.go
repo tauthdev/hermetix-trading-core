@@ -11,7 +11,10 @@ package hermetix
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +38,11 @@ const (
 	// TelemetrySchema - 계약 버전
 	TelemetrySchema = 1
 	telemetrySDK    = "go"
+
+	// TelemetrySigningKeyID / TelemetrySigningKey - 요청 서명 (docs/telemetry.md "요청 서명").
+	// 공개 SDK 라 비밀이 아니며, 아무 curl 이나 스캐너가 보내지 못하게 하는 문턱이다. 키 회전 시 ID 를 올린다
+	TelemetrySigningKeyID = "v1"
+	TelemetrySigningKey   = "d97f20cb942540462ea83648ee30a9786bd658b3dc813f74ef011845da258503"
 
 	telemetryFlushInterval = 60 * time.Second
 	telemetryLatencySample = 256
@@ -346,13 +354,28 @@ var telemetryHTTP = &http.Client{
 	Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext},
 }
 
+// telemetryEndpoint - 실제 전송 주소. 상수 TelemetryEndpoint 와 같으며 테스트에서만 바꾼다
+var telemetryEndpoint = TelemetryEndpoint
+
+// SignTelemetry - 계약의 요청 서명: hex(HMAC-SHA256(key, timestamp + "\n" + body)), 소문자 hex 64자
+func SignTelemetry(body []byte, timestampSeconds int64) string {
+	mac := hmac.New(sha256.New, []byte(TelemetrySigningKey))
+	mac.Write([]byte(fmt.Sprintf("%d\n", timestampSeconds)))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func telemetryPost(body []byte) error {
-	req, err := http.NewRequest("POST", TelemetryEndpoint, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", telemetryEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
+	timestamp := time.Now().Unix()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hermetix-"+telemetrySDK+"/"+Version)
+	req.Header.Set("X-Hermetix-Key-Id", TelemetrySigningKeyID)
+	req.Header.Set("X-Hermetix-Timestamp", fmt.Sprintf("%d", timestamp))
+	req.Header.Set("X-Hermetix-Signature", SignTelemetry(body, timestamp))
 	resp, err := telemetryHTTP.Do(req)
 	if err != nil {
 		return err
