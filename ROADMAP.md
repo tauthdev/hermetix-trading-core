@@ -49,6 +49,14 @@
 - [ ] 주문 통보 실측 → 픽스처 `orderEvents.measured=true`, README ⚠️ 주문통보 → ✅ (KIS HTS ID + 일반 키움 모의 계좌 필요)
 - [x] (0.10.0) nh·db·ls·toss 실시간 스트림 — 공식 문서·SDK·AsyncAPI 로 조사(2026-09-14)해 체결·호가·주문통보를 문서 기반으로 구현, 네 언어, 픽스처 `stream.measured=false`. **KB 는 웹소켓이 없어 제외**(개인 오픈베타 명세 95개 전부 REST). 실측은 해당 증권사 계좌 사용자 제보로
 
+## Phase F — 증권사 사용량 랭킹 (진행 중)
+
+OpenRouter 의 모델 랭킹처럼, SDK 가 집계한 실사용량으로 **국내외 증권사 오픈 API 사용량 랭킹**을 공개한다. 계약은 [docs/telemetry.md](docs/telemetry.md).
+
+- [x] (0.11.0) 사용량 텔레메트리 — 브로커·환경·호출 종류별 건수·에러 분류·응답 시간 분포·스트림 건수·SDK 버전·설치 ID 를 시간 버킷으로 합산해 60초마다 전송. 종목·수량·가격·계좌·주문번호·키·IP 는 보내지 않음. 기본 배포본 항상 켜짐(설정 없음), 매매 경로와 분리, 새 의존성 없음. Kotlin 코어 + 네 언어 계측
+- [ ] `hermetix-service` (별도 레포, AWS) — `POST /v1/usage` 수신·집계, `GET /v1/rankings`, 랭킹 페이지. 수신 도메인 확정 후 SDK 엔드포인트 상수 갱신
+- [ ] 랭킹 페이지 공개 — 브로커별 호출량·실전 비율·에러율·p50/p95·설치 수·언어 비중·실시간 채널 사용량, 7일/30일
+
 ## Phase E — 다언어 도달 (진행 중)
 
 - [x] (2026-09-14) 한 줄 설치 배포 — Kotlin JitPack, Go `go/v0.10.0` 태그, npm `hermetix`, PyPI `hermetix`. 릴리즈 절차는 수동(CI 없음): 태그 → `npm publish`(2FA 브라우저) → `twine upload`
