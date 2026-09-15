@@ -114,6 +114,11 @@ func (c *KisClient) SetHTSID(htsID string) *KisClient {
 
 func (c *KisClient) Environment() TradingEnvironment { return c.environment }
 
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *KisClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "kis", Environment: c.environment}
+}
+
 // BaseURL - 현재 적용된 호스트.
 func (c *KisClient) BaseURL() string { return c.baseURL }
 
@@ -146,6 +151,7 @@ func (c *KisClient) OpenStream() MarketStream {
 	s := newKisMarketStream(c.wsURL, "P", c.ApprovalKey)
 	s.htsID = c.htsID
 	s.live = c.environment == Live
+	s.withUsage(c.usage())
 	return s
 }
 
@@ -200,7 +206,8 @@ func (c *KisClient) ApplyOrderEvent(event OrderEvent) {
 
 // ApprovalKey - 웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 — 접속마다 새로 받아도 무방하고
 // 문서상 유효기간이 명시돼 있지 않다. 필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의.
-func (c *KisClient) ApprovalKey() (string, error) {
+func (c *KisClient) ApprovalKey() (_ string, err error) {
+	defer c.usage().Measure("auth")(&err)
 	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]string{
 		"grant_type": "client_credentials", "appkey": c.appkey, "secretkey": c.appsecret,
@@ -219,7 +226,8 @@ func (c *KisClient) ApprovalKey() (string, error) {
 
 // ------------------------------------------------------------------- market
 
-func (c *KisClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *KisClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
 		body, err := c.call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100",
@@ -242,7 +250,8 @@ func (c *KisClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *KisClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *KisClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("KIS 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -287,13 +296,15 @@ func (c *KisClient) GetCandles(symbol string, interval CandleInterval, limit int
 	return candles, nil
 }
 
-func (c *KisClient) GetCalendar() ([]MarketDay, error) {
+func (c *KisClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
 	return krxCalendar(31), nil
 }
 
 // ------------------------------------------------------------------ account
 
-func (c *KisClient) GetAccount() (Account, error) {
+func (c *KisClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return Account{}, err
@@ -309,7 +320,8 @@ func (c *KisClient) GetAccount() (Account, error) {
 	}, nil
 }
 
-func (c *KisClient) GetHoldings() ([]Holding, error) {
+func (c *KisClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -334,7 +346,8 @@ func (c *KisClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *KisClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *KisClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	query := c.acct()
 	query["PDNO"] = "005930"
 	query["ORD_UNPR"] = ""
@@ -350,7 +363,8 @@ func (c *KisClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *KisClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	trID := c.tr("TTC0801U")
 	if request.Side == Buy {
 		trID = c.tr("TTC0802U")
@@ -396,7 +410,8 @@ func (c *KisClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	return order, nil
 }
 
-func (c *KisClient) GetOrders() ([]Order, error) {
+func (c *KisClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	if err := c.refreshTracked(); err != nil {
 		return nil, err
 	}
@@ -411,7 +426,8 @@ func (c *KisClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *KisClient) GetOrder(orderID string) (Order, error) {
+func (c *KisClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	if err := c.refreshTracked(); err != nil {
 		return Order{}, err
 	}
@@ -424,7 +440,8 @@ func (c *KisClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil
 }
 
-func (c *KisClient) CancelOrder(orderID string) (Order, error) {
+func (c *KisClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	// 실측: 모의 서버는 지점번호 없이 ODNO 만으로 취소된다
 	payload := c.acct()
 	payload["KRX_FWDG_ORD_ORGNO"] = ""
@@ -448,7 +465,8 @@ func (c *KisClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled, CanceledAt: &now}, nil
 }
 
-func (c *KisClient) GetFills() ([]Fill, error) {
+func (c *KisClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	if err := c.refreshTracked(); err != nil {
 		return nil, err
 	}
@@ -597,12 +615,13 @@ func (c *KisClient) requestOnce(method, path, trID string, query, jsonBody map[s
 	return body, nil
 }
 
-func (c *KisClient) getToken() (string, error) {
+func (c *KisClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]string{
 		"grant_type": "client_credentials", "appkey": c.appkey, "appsecret": c.appsecret,

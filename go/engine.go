@@ -593,6 +593,7 @@ func (e *StrategyEngine) Stop() {
 		if stream != nil {
 			_ = stream.Close()
 		}
+		FlushTelemetry() // 종료 전에 남은 사용량 버킷을 보낸다 (docs/telemetry.md)
 	})
 }
 

@@ -108,6 +108,7 @@ func (s *KiwoomMarketStream) SubscribeTrades(symbols []string, listener TradeLis
 	s.mu.Lock()
 	newCodes := registerKiwoom(s, symbols, listener, s.listeners)
 	s.mu.Unlock()
+	s.usageSubscribed(StreamTrades, len(newCodes))
 	if len(newCodes) > 0 && s.IsConnected() {
 		s.Send(s.registerMessage(newCodes, kiwoomTypeTrade))
 	}
@@ -117,6 +118,7 @@ func (s *KiwoomMarketStream) SubscribeOrderBook(symbols []string, listener Order
 	s.mu.Lock()
 	newCodes := registerKiwoom(s, symbols, listener, s.bookListeners)
 	s.mu.Unlock()
+	s.usageSubscribed(StreamOrderBook, len(newCodes))
 	if len(newCodes) > 0 && s.IsConnected() {
 		s.Send(s.registerMessage(newCodes, kiwoomTypeOrderBook))
 	}
@@ -128,6 +130,9 @@ func (s *KiwoomMarketStream) SubscribeOrderEvents(listener OrderEventListener) e
 	first := len(s.orderListeners) == 0
 	s.orderListeners = append(s.orderListeners, listener)
 	s.mu.Unlock()
+	if first {
+		s.usageSubscribed(StreamOrderEvents, 1)
+	}
 	if first && s.IsConnected() {
 		s.Send(s.registerMessage([]string{""}, kiwoomTypeOrderEvents))
 	}
@@ -206,6 +211,7 @@ func (s *KiwoomMarketStream) deliver(tick TradeTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	s.usageMessage(StreamTrades)
 	for _, listener := range listeners {
 		safeCall("kiwoom", tick.Symbol, func() { listener(tick) })
 	}
@@ -220,6 +226,7 @@ func (s *KiwoomMarketStream) deliverBook(tick OrderBookTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	s.usageMessage(StreamOrderBook)
 	for _, listener := range listeners {
 		safeCall("kiwoom", tick.Symbol, func() { listener(tick) })
 	}
@@ -229,6 +236,7 @@ func (s *KiwoomMarketStream) deliverOrderEvent(event OrderEvent) {
 	s.mu.Lock()
 	listeners := append([]OrderEventListener(nil), s.orderListeners...)
 	s.mu.Unlock()
+	s.usageMessage(StreamOrderEvents)
 	for _, listener := range listeners {
 		safeCall("kiwoom", event.OrderID, func() { listener(event) })
 	}

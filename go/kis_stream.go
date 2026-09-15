@@ -151,6 +151,7 @@ func (s *KisMarketStream) SubscribeTrades(symbols []string, listener TradeListen
 	s.mu.Lock()
 	newCodes := register(s, symbols, listener, s.listeners)
 	s.mu.Unlock()
+	s.usageSubscribed(StreamTrades, len(newCodes))
 	s.sendSubscriptions(kisTrTrade, newCodes)
 }
 
@@ -158,6 +159,7 @@ func (s *KisMarketStream) SubscribeOrderBook(symbols []string, listener OrderBoo
 	s.mu.Lock()
 	newCodes := register(s, symbols, listener, s.bookListeners)
 	s.mu.Unlock()
+	s.usageSubscribed(StreamOrderBook, len(newCodes))
 	s.sendSubscriptions(kisTrOrderBook, newCodes)
 	return nil
 }
@@ -170,6 +172,9 @@ func (s *KisMarketStream) SubscribeOrderEvents(listener OrderEventListener) erro
 	first := len(s.orderListeners) == 0
 	s.orderListeners = append(s.orderListeners, listener)
 	s.mu.Unlock()
+	if first {
+		s.usageSubscribed(StreamOrderEvents, 1)
+	}
 	if first && s.IsSocketOpen() {
 		key, err := s.approvalKey()
 		if err != nil {
@@ -278,6 +283,7 @@ func (s *KisMarketStream) deliver(tick TradeTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	s.usageMessage(StreamTrades)
 	for _, listener := range listeners {
 		safeCall("kis", tick.Symbol, func() { listener(tick) })
 	}
@@ -292,6 +298,7 @@ func (s *KisMarketStream) deliverBook(tick OrderBookTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	s.usageMessage(StreamOrderBook)
 	for _, listener := range listeners {
 		safeCall("kis", tick.Symbol, func() { listener(tick) })
 	}
@@ -301,6 +308,7 @@ func (s *KisMarketStream) deliverOrderEvent(event OrderEvent) {
 	s.mu.Lock()
 	listeners := append([]OrderEventListener(nil), s.orderListeners...)
 	s.mu.Unlock()
+	s.usageMessage(StreamOrderEvents)
 	for _, listener := range listeners {
 		safeCall("kis", event.OrderID, func() { listener(event) })
 	}

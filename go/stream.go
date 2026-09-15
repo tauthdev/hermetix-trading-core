@@ -60,6 +60,24 @@ type reconnectingWebSocket struct {
 
 	// RawFrameHook - 원시 텍스트 프레임 관찰용 훅 (프로토콜 실측·픽스처 채집). 파싱 전에 호출되며 panic 은 무시된다
 	RawFrameHook func(string)
+
+	// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). nil 이면 세지 않는다
+	usage *BrokerUsage
+}
+
+// withUsage - 텔레메트리 핸들을 붙인다 (OpenStream 이 부른다).
+func (w *reconnectingWebSocket) withUsage(u BrokerUsage) { w.usage = &u }
+
+func (w *reconnectingWebSocket) usageSubscribed(ch StreamChannel, n int) {
+	if w.usage != nil {
+		w.usage.StreamSubscribed(ch, n)
+	}
+}
+
+func (w *reconnectingWebSocket) usageMessage(ch StreamChannel) {
+	if w.usage != nil {
+		w.usage.StreamMessage(ch, 1)
+	}
 }
 
 func newReconnectingWebSocket(name string, protocol streamProtocol) *reconnectingWebSocket {
@@ -262,6 +280,9 @@ func (w *reconnectingWebSocket) nextBackoff() time.Duration {
 	n := w.attempt
 	w.attempt++
 	w.mu.Unlock()
+	if w.usage != nil {
+		w.usage.Reconnected() // 백오프 예약 = 재접속 시도 1회 (첫 접속 성공은 여기를 지나지 않는다)
+	}
 	if n > 10 {
 		n = 10
 	}

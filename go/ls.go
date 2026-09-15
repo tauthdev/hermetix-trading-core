@@ -83,8 +83,19 @@ func (c *LsClient) SetWSURL(wsURL string) *LsClient {
 }
 
 // OpenStream - 실시간 스트림(S3_/K3_ 체결·H1_/HA_ 호가·SC0~SC4 주문 통보). 문서 기반, 실측 전. KOSPI·KOSDAQ TR 을 둘 다 등록한다.
-func (c *LsClient) OpenStream() MarketStream        { return newLsMarketStream(c.wsURL, c.getToken) }
+func (c *LsClient) OpenStream() MarketStream {
+	s := newLsMarketStream(c.wsURL, c.getToken)
+	s.withUsage(c.usage())
+	u := c.usage()
+	s.listeners.usage = &u
+	return s
+}
 func (c *LsClient) Environment() TradingEnvironment { return c.environment }
+
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *LsClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "ls", Environment: c.environment}
+}
 func (c *LsClient) SetThrottle(d time.Duration) *LsClient {
 	c.limiter = newRateLimiter(d, 3, func(a int) time.Duration { return time.Duration(a) * time.Second })
 	return c
@@ -133,7 +144,8 @@ func lsRemaining(row map[string]any) decimal.Decimal {
 
 // ------------------------------------------------------------------- market
 
-func (c *LsClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *LsClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -171,7 +183,8 @@ func (c *LsClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *LsClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *LsClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("LS 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -212,13 +225,17 @@ func (c *LsClient) GetCandles(symbol string, interval CandleInterval, limit int)
 	return candles, nil
 }
 
-func (c *LsClient) GetCalendar() ([]MarketDay, error) { return krxCalendar(31), nil }
+func (c *LsClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
+	return krxCalendar(31), nil
+}
 
 // ------------------------------------------------------------------ account
 
 func (c *LsClient) accountID() string { return "ls-" + strings.ToLower(string(c.environment)) }
 
-func (c *LsClient) GetAccount() (Account, error) {
+func (c *LsClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return Account{}, err
@@ -232,7 +249,8 @@ func (c *LsClient) GetAccount() (Account, error) {
 	return Account{AccountID: c.accountID(), Currency: "KRW", Cash: cash, PortfolioValue: portfolio, Status: "ACTIVE"}, nil
 }
 
-func (c *LsClient) GetHoldings() ([]Holding, error) {
+func (c *LsClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -251,7 +269,8 @@ func (c *LsClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *LsClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *LsClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	body, err := c.call("/stock/accno", "CSPAQ12200", "CSPAQ12200InBlock1", map[string]any{"BalCreTp": "0"})
 	if err != nil {
 		return decimal.Zero, err
@@ -265,7 +284,8 @@ func (c *LsClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *LsClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *LsClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	code, err := c.Capabilities().SymbolCode(request.Symbol)
 	if err != nil {
 		return Order{}, err
@@ -302,7 +322,8 @@ func (c *LsClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *LsClient) GetOrders() ([]Order, error) {
+func (c *LsClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return nil, err
@@ -316,7 +337,8 @@ func (c *LsClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *LsClient) GetOrder(orderID string) (Order, error) {
+func (c *LsClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return Order{}, err
@@ -329,7 +351,8 @@ func (c *LsClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil
 }
 
-func (c *LsClient) CancelOrder(orderID string) (Order, error) {
+func (c *LsClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return Order{}, err
@@ -353,7 +376,8 @@ func (c *LsClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: PendingCancel, CanceledAt: &now}, nil
 }
 
-func (c *LsClient) GetFills() ([]Fill, error) {
+func (c *LsClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return nil, err
@@ -467,12 +491,13 @@ func (c *LsClient) requestOnce(path, trCd, inBlock string, body map[string]any) 
 	return parsed, nil
 }
 
-func (c *LsClient) getToken() (string, error) {
+func (c *LsClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-10*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	form := url.Values{"grant_type": {"client_credentials"}, "appkey": {c.appKey}, "appsecretkey": {c.appSecret}, "scope": {"oob"}}
 	status, body, err := httpJSON(c.http, "POST", c.baseURL+"/oauth2/token",

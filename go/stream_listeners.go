@@ -18,6 +18,19 @@ type symbolListeners struct {
 	orders    []OrderEventListener
 	requested map[string]string
 	keyOf     func(symbol string) string
+	usage     *BrokerUsage // 텔레메트리 (nil 이면 세지 않는다)
+}
+
+func (sl *symbolListeners) countSubscribed(ch StreamChannel, n int) {
+	if sl.usage != nil {
+		sl.usage.StreamSubscribed(ch, n)
+	}
+}
+
+func (sl *symbolListeners) countMessage(ch StreamChannel) {
+	if sl.usage != nil {
+		sl.usage.StreamMessage(ch, 1)
+	}
 }
 
 func newSymbolListeners(keyOf func(symbol string) string) *symbolListeners {
@@ -49,11 +62,15 @@ func addListeners[L any](sl *symbolListeners, symbols []string, listener L, targ
 
 // addTrades - 새로 구독해야 하는 키 목록을 돌려준다.
 func (sl *symbolListeners) addTrades(symbols []string, l TradeListener) []string {
-	return addListeners(sl, symbols, l, sl.trades)
+	newKeys := addListeners(sl, symbols, l, sl.trades)
+	sl.countSubscribed(StreamTrades, len(newKeys))
+	return newKeys
 }
 
 func (sl *symbolListeners) addBooks(symbols []string, l OrderBookListener) []string {
-	return addListeners(sl, symbols, l, sl.books)
+	newKeys := addListeners(sl, symbols, l, sl.books)
+	sl.countSubscribed(StreamOrderBook, len(newKeys))
+	return newKeys
 }
 
 // addOrders - 첫 리스너면 true (구독 메시지를 보내야 한다).
@@ -62,6 +79,9 @@ func (sl *symbolListeners) addOrders(l OrderEventListener) bool {
 	defer sl.mu.Unlock()
 	first := len(sl.orders) == 0
 	sl.orders = append(sl.orders, l)
+	if first {
+		sl.countSubscribed(StreamOrderEvents, 1)
+	}
 	return first
 }
 
@@ -126,6 +146,7 @@ func (sl *symbolListeners) deliverTrade(name, key string, tick TradeTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	sl.countMessage(StreamTrades)
 	for _, listener := range listeners {
 		safeCall(name, tick.Symbol, func() { listener(tick) })
 	}
@@ -139,6 +160,7 @@ func (sl *symbolListeners) deliverBook(name, key string, tick OrderBookTick) {
 	if ok {
 		tick.Symbol = symbol
 	}
+	sl.countMessage(StreamOrderBook)
 	for _, listener := range listeners {
 		safeCall(name, tick.Symbol, func() { listener(tick) })
 	}
@@ -148,6 +170,7 @@ func (sl *symbolListeners) deliverOrder(name string, event OrderEvent) {
 	sl.mu.Lock()
 	listeners := append([]OrderEventListener(nil), sl.orders...)
 	sl.mu.Unlock()
+	sl.countMessage(StreamOrderEvents)
 	for _, listener := range listeners {
 		safeCall(name, event.OrderID, func() { listener(event) })
 	}

@@ -145,6 +145,11 @@ func (c *NextClient) SetEnvironment(env TradingEnvironment) error {
 
 func (c *NextClient) Environment() TradingEnvironment { return c.environment }
 
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *NextClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "next", Environment: c.environment}
+}
+
 func (c *NextClient) Capabilities() BrokerCapabilities {
 	return BrokerCapabilities{
 		BrokerID: "next", Market: "US", Currency: "USD",
@@ -159,7 +164,8 @@ func (c *NextClient) Capabilities() BrokerCapabilities {
 
 // ------------------------------------------------------------------- market
 
-func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *NextClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	codes := make([]string, 0, len(symbols))
 	requested := map[string]string{}
@@ -203,7 +209,8 @@ func (c *NextClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *NextClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *NextClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	code, err := c.Capabilities().SymbolCode(symbol)
 	if err != nil {
 		return nil, err
@@ -228,7 +235,8 @@ func (c *NextClient) GetCandles(symbol string, interval CandleInterval, limit in
 }
 
 // GetCalendar — v1.3: date 는 거래소 현지 일자, 세션 시각은 KST → 뉴욕 현지 HH:MM 으로 바꿔 담는다.
-func (c *NextClient) GetCalendar() ([]MarketDay, error) {
+func (c *NextClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
 	body, err := c.call("GET", "/v1/market/calendar", false, nil)
 	if err != nil {
 		return nil, err
@@ -260,7 +268,8 @@ func (c *NextClient) GetCalendar() ([]MarketDay, error) {
 // ------------------------------------------------------------------ account
 
 // GetAccount — v1.3 계좌 응답은 예수금(cashAmount)만 준다. 총평가는 예수금 + 보유 평가금액 합 (보유 조회 1회 추가).
-func (c *NextClient) GetAccount() (Account, error) {
+func (c *NextClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	body, err := c.call("GET", "/v1/account", true, nil)
 	if err != nil {
 		return Account{}, err
@@ -287,7 +296,8 @@ func (c *NextClient) GetAccount() (Account, error) {
 	}, nil
 }
 
-func (c *NextClient) GetHoldings() ([]Holding, error) {
+func (c *NextClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	body, err := c.call("GET", "/v1/account/holdings", true, nil)
 	if err != nil {
 		return nil, err
@@ -303,7 +313,8 @@ func (c *NextClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *NextClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *NextClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	body, err := c.call("GET", "/v1/account/buying-power", true, nil)
 	if err != nil {
 		return decimal.Zero, err
@@ -313,7 +324,8 @@ func (c *NextClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *NextClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *NextClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	tif := request.TimeInForce
 	if tif == "" {
 		tif = Day
@@ -344,7 +356,8 @@ func (c *NextClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	return nextOrder(body), nil
 }
 
-func (c *NextClient) GetOrders() ([]Order, error) {
+func (c *NextClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	body, err := c.call("GET", "/v1/orders", true, nil)
 	if err != nil {
 		return nil, err
@@ -356,7 +369,8 @@ func (c *NextClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *NextClient) GetOrder(orderID string) (Order, error) {
+func (c *NextClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	body, err := c.call("GET", "/v1/orders/"+orderID, true, nil)
 	if err != nil {
 		return Order{}, err
@@ -364,7 +378,8 @@ func (c *NextClient) GetOrder(orderID string) (Order, error) {
 	return nextOrder(body), nil
 }
 
-func (c *NextClient) CancelOrder(orderID string) (Order, error) {
+func (c *NextClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	body, err := c.call("DELETE", "/v1/orders/"+orderID, true, nil)
 	if err != nil {
 		return Order{}, err
@@ -372,7 +387,8 @@ func (c *NextClient) CancelOrder(orderID string) (Order, error) {
 	return nextOrder(body), nil
 }
 
-func (c *NextClient) GetFills() ([]Fill, error) {
+func (c *NextClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	body, err := c.call("GET", "/v1/orders/fills", true, nil)
 	if err != nil {
 		return nil, err
@@ -495,12 +511,13 @@ func nextTokenError(status int, body map[string]any) error {
 	return newAuthError(status, str(e["code"]), fmt.Sprintf("Next 토큰 발급 실패(%s): %s", str(e["code"]), str(e["message"])))
 }
 
-func (c *NextClient) getToken() (string, error) {
+func (c *NextClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	form := url.Values{
 		"grant_type":    {"client_credentials"},
 		"client_id":     {c.clientID},

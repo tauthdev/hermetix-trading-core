@@ -84,8 +84,19 @@ func (c *DbClient) SetWSURL(wsURL string) *DbClient {
 }
 
 // OpenStream - 실시간 스트림(S00 체결·S01 호가·IS0/IS1 주문 통보). 문서 기반, 실측 전.
-func (c *DbClient) OpenStream() MarketStream        { return newDbMarketStream(c.wsURL, c.getToken) }
+func (c *DbClient) OpenStream() MarketStream {
+	s := newDbMarketStream(c.wsURL, c.getToken)
+	s.withUsage(c.usage())
+	u := c.usage()
+	s.listeners.usage = &u
+	return s
+}
 func (c *DbClient) Environment() TradingEnvironment { return c.environment }
+
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *DbClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "db", Environment: c.environment}
+}
 func (c *DbClient) SetThrottle(d time.Duration) *DbClient {
 	c.limiter = newRateLimiter(d, 4, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second })
 	return c
@@ -127,7 +138,8 @@ func dbRemaining(row map[string]any) decimal.Decimal {
 
 // ------------------------------------------------------------------- market
 
-func (c *DbClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *DbClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -148,7 +160,8 @@ func (c *DbClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *DbClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *DbClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("DB 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -194,13 +207,17 @@ func (c *DbClient) GetCandles(symbol string, interval CandleInterval, limit int)
 	return candles, nil
 }
 
-func (c *DbClient) GetCalendar() ([]MarketDay, error) { return krxCalendar(31), nil }
+func (c *DbClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
+	return krxCalendar(31), nil
+}
 
 // ------------------------------------------------------------------ account
 
 func (c *DbClient) accountID() string { return "db-" + strings.ToLower(string(c.environment)) }
 
-func (c *DbClient) GetAccount() (Account, error) {
+func (c *DbClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return Account{}, err
@@ -214,7 +231,8 @@ func (c *DbClient) GetAccount() (Account, error) {
 	return Account{AccountID: c.accountID(), Currency: "KRW", Cash: cash, PortfolioValue: portfolio, Status: "ACTIVE"}, nil
 }
 
-func (c *DbClient) GetHoldings() ([]Holding, error) {
+func (c *DbClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -236,7 +254,8 @@ func (c *DbClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *DbClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *DbClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	body, err := c.call("/api/v1/trading/kr-stock/inquiry/acnt-deposit", map[string]any{})
 	if err != nil {
 		return decimal.Zero, err
@@ -250,7 +269,8 @@ func (c *DbClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *DbClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *DbClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	code, err := c.Capabilities().SymbolCode(request.Symbol)
 	if err != nil {
 		return Order{}, err
@@ -287,7 +307,8 @@ func (c *DbClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *DbClient) GetOrders() ([]Order, error) {
+func (c *DbClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	rowsList, err := c.historyRows()
 	if err != nil {
 		return nil, err
@@ -301,7 +322,8 @@ func (c *DbClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *DbClient) GetOrder(orderID string) (Order, error) {
+func (c *DbClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	rowsList, err := c.historyRows()
 	if err != nil {
 		return Order{}, err
@@ -314,7 +336,8 @@ func (c *DbClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil
 }
 
-func (c *DbClient) CancelOrder(orderID string) (Order, error) {
+func (c *DbClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	rowsList, err := c.historyRows()
 	if err != nil {
 		return Order{}, err
@@ -338,7 +361,8 @@ func (c *DbClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: PendingCancel, CanceledAt: &now}, nil
 }
 
-func (c *DbClient) GetFills() ([]Fill, error) {
+func (c *DbClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	rowsList, err := c.historyRows()
 	if err != nil {
 		return nil, err
@@ -447,12 +471,13 @@ func (c *DbClient) requestOnce(path string, body map[string]any) (map[string]any
 	return parsed, nil
 }
 
-func (c *DbClient) getToken() (string, error) {
+func (c *DbClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-10*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	form := url.Values{"grant_type": {"client_credentials"}, "appkey": {c.appKey}, "appsecretkey": {c.appSecret}, "scope": {"oob"}} // JSON/appsecret 은 IGW00133
 	status, body, err := httpJSON(c.http, "POST", c.baseURL+"/oauth2/token",

@@ -91,6 +91,11 @@ func (c *NhClient) SetEnvironment(env TradingEnvironment) *NhClient {
 
 func (c *NhClient) Environment() TradingEnvironment { return c.environment }
 
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *NhClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "nh", Environment: c.environment}
+}
+
 // SetWSURL - 실시간 웹소켓 주소를 직접 지정 (환경 자동 결정 무시 — 모의 wss://moapi…:17070/websocket, 운영 wss://api…:7070/websocket).
 // 포털 가이드는 모의 시세 채널을 "미제공" 으로 표기한다(통보만 올 수 있음). 세션당 등록 10건(SDK 실측)/30건(공식), 앱키당 세션 2개.
 func (c *NhClient) SetWSURL(wsURL string) *NhClient {
@@ -101,7 +106,11 @@ func (c *NhClient) SetWSURL(wsURL string) *NhClient {
 
 // OpenStream - 실시간 스트림(체결·호가·주문 통보). 문서 기반, 실측 전. 채널은 marketCd 에 따라 oc/ob·nc/nb·mc/mb.
 func (c *NhClient) OpenStream() MarketStream {
-	return newNhMarketStream(c.wsURL, c.marketCd, c.accountNo, c.getToken)
+	s := newNhMarketStream(c.wsURL, c.marketCd, c.accountNo, c.getToken)
+	s.withUsage(c.usage())
+	u := c.usage()
+	s.listeners.usage = &u
+	return s
 }
 
 func (c *NhClient) Capabilities() BrokerCapabilities {
@@ -199,7 +208,8 @@ func nhSide(row map[string]any) OrderSide {
 
 // ------------------------------------------------------------------- market
 
-func (c *NhClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *NhClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -240,7 +250,8 @@ func (c *NhClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *NhClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *NhClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("NH 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -274,11 +285,15 @@ func (c *NhClient) GetCandles(symbol string, interval CandleInterval, limit int)
 	return candles, nil
 }
 
-func (c *NhClient) GetCalendar() ([]MarketDay, error) { return krxCalendar(31), nil }
+func (c *NhClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
+	return krxCalendar(31), nil
+}
 
 // ------------------------------------------------------------------ account
 
-func (c *NhClient) GetAccount() (Account, error) {
+func (c *NhClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return Account{}, err
@@ -296,7 +311,8 @@ func (c *NhClient) GetAccount() (Account, error) {
 	return Account{AccountID: acct, Currency: "KRW", Cash: cash, PortfolioValue: portfolio, Status: "ACTIVE"}, nil
 }
 
-func (c *NhClient) GetHoldings() ([]Holding, error) {
+func (c *NhClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -316,7 +332,8 @@ func (c *NhClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *NhClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *NhClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	body, err := c.balance()
 	if err != nil {
 		return decimal.Zero, err
@@ -330,7 +347,8 @@ func (c *NhClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *NhClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *NhClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	code, err := c.Capabilities().SymbolCode(request.Symbol)
 	if err != nil {
 		return Order{}, err
@@ -369,7 +387,8 @@ func (c *NhClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *NhClient) GetOrders() ([]Order, error) {
+func (c *NhClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	rowsList, err := c.executionRows()
 	if err != nil {
 		return nil, err
@@ -383,7 +402,8 @@ func (c *NhClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *NhClient) GetOrder(orderID string) (Order, error) {
+func (c *NhClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	rowsList, err := c.executionRows()
 	if err != nil {
 		return Order{}, err
@@ -396,7 +416,8 @@ func (c *NhClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil // 당일 조회에 없으면 종료로 간주
 }
 
-func (c *NhClient) CancelOrder(orderID string) (Order, error) {
+func (c *NhClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	rowsList, err := c.executionRows()
 	if err != nil {
 		return Order{}, err
@@ -424,7 +445,8 @@ func (c *NhClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled, CanceledAt: &now}, nil
 }
 
-func (c *NhClient) GetFills() ([]Fill, error) {
+func (c *NhClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	rowsList, err := c.executionRows()
 	if err != nil {
 		return nil, err
@@ -576,12 +598,13 @@ func (c *NhClient) requestOnce(path string, body map[string]any) (map[string]any
 	return parsed, nil
 }
 
-func (c *NhClient) getToken() (string, error) {
+func (c *NhClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	// SDK 규약: 파라미터는 쿼리스트링, 본문 없음, content-type 은 form-urlencoded
 	query := url.Values{"appkey": {c.appKey}, "appsecretkey": {c.appSecret}, "grant_type": {"client_credentials"}, "scope": {"oob"}}

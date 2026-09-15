@@ -58,6 +58,11 @@ func (c *KbClient) SetSorOrderCcd(v string) *KbClient               { c.sorOrder
 func (c *KbClient) SetChartMarketClsf(v string) *KbClient           { c.chartMarketClsf = v; return c }
 func (c *KbClient) SetEnvironment(env TradingEnvironment) *KbClient { c.environment = env; return c }
 func (c *KbClient) Environment() TradingEnvironment                 { return c.environment }
+
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *KbClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "kb", Environment: c.environment}
+}
 func (c *KbClient) SetThrottle(d time.Duration) *KbClient {
 	c.limiter = newRateLimiter(d, 3, func(a int) time.Duration { return time.Duration(a) * time.Second })
 	return c
@@ -109,7 +114,8 @@ func kbRemaining(row map[string]any) decimal.Decimal {
 
 // ------------------------------------------------------------------- market
 
-func (c *KbClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *KbClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
@@ -146,7 +152,8 @@ func (c *KbClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *KbClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *KbClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("KB 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -182,11 +189,15 @@ func (c *KbClient) GetCandles(symbol string, interval CandleInterval, limit int)
 	return candles, nil
 }
 
-func (c *KbClient) GetCalendar() ([]MarketDay, error) { return krxCalendar(31), nil }
+func (c *KbClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
+	return krxCalendar(31), nil
+}
 
 // ------------------------------------------------------------------ account
 
-func (c *KbClient) GetAccount() (Account, error) {
+func (c *KbClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	out, err := c.balance()
 	if err != nil {
 		return Account{}, err
@@ -199,7 +210,8 @@ func (c *KbClient) GetAccount() (Account, error) {
 	return Account{AccountID: "kb-live", Currency: "KRW", Cash: cash, PortfolioValue: portfolio, Status: "ACTIVE"}, nil
 }
 
-func (c *KbClient) GetHoldings() ([]Holding, error) {
+func (c *KbClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	out, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -221,7 +233,8 @@ func (c *KbClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *KbClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *KbClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	out, err := c.call("/api/v1/ssqm1802", map[string]any{"bnd_mktio_ccd": "1", "is_no": ""})
 	if err != nil {
 		return decimal.Zero, err
@@ -242,7 +255,8 @@ func (c *KbClient) orderBody(jbClsf, code, qty, price, ordrCcd string) map[strin
 	}
 }
 
-func (c *KbClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *KbClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	code, err := c.Capabilities().SymbolCode(request.Symbol)
 	if err != nil {
 		return Order{}, err
@@ -276,7 +290,8 @@ func (c *KbClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *KbClient) GetOrders() ([]Order, error) {
+func (c *KbClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return nil, err
@@ -290,7 +305,8 @@ func (c *KbClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *KbClient) GetOrder(orderID string) (Order, error) {
+func (c *KbClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return Order{}, err
@@ -303,7 +319,8 @@ func (c *KbClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil
 }
 
-func (c *KbClient) CancelOrder(orderID string) (Order, error) {
+func (c *KbClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return Order{}, err
@@ -327,7 +344,8 @@ func (c *KbClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: PendingCancel, CanceledAt: &now}, nil
 }
 
-func (c *KbClient) GetFills() ([]Fill, error) {
+func (c *KbClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	rowsList, err := c.orderRows()
 	if err != nil {
 		return nil, err
@@ -447,12 +465,13 @@ func (c *KbClient) requestOnce(path string, body map[string]any) (map[string]any
 	return data, nil
 }
 
-func (c *KbClient) getToken() (string, error) {
+func (c *KbClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]any{
 		"dataHeader": map[string]any{"ipAddr": "", "macAddr": ""},

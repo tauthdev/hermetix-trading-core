@@ -150,7 +150,7 @@ abstract class ReconnectingWebSocket(
     private fun scheduleReconnect() {
         if (closed || executor.isShutdown) return
         val n = attempt.getAndIncrement()
-        if (n > 0) usage?.reconnected() // 첫 접속 실패 재시도부터 셈 (정상 첫 접속은 재접속이 아님)
+        usage?.reconnected() // 재접속 예약마다 1회 — 첫 접속은 여기를 거치지 않으므로 세지 않는다 (네 언어 동일 규칙)
         val delay = min(1000L shl min(n, 10), maxBackoffMillis)
         logger.info { "$name stream: reconnect in ${delay}ms" }
         executor.schedule(::doConnect, delay, TimeUnit.MILLISECONDS)

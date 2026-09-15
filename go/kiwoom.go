@@ -90,6 +90,11 @@ func (c *KiwoomClient) SetWSURL(wsURL string) *KiwoomClient {
 
 func (c *KiwoomClient) Environment() TradingEnvironment { return c.environment }
 
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *KiwoomClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "kiwoom", Environment: c.environment}
+}
+
 // BaseURL - 현재 적용된 호스트.
 func (c *KiwoomClient) BaseURL() string { return c.baseURL }
 
@@ -109,12 +114,15 @@ func (c *KiwoomClient) Capabilities() BrokerCapabilities {
 
 // OpenStream - 체결 웹소켓 스트림. 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 getToken 이 갱신한다.
 func (c *KiwoomClient) OpenStream() MarketStream {
-	return newKiwoomMarketStream(c.wsURL, c.getToken)
+	s := newKiwoomMarketStream(c.wsURL, c.getToken)
+	s.withUsage(c.usage())
+	return s
 }
 
 // ------------------------------------------------------------------- market
 
-func (c *KiwoomClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *KiwoomClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	quotes := make([]Quote, 0, len(symbols))
 	for _, symbol := range symbols {
 		body, err := c.call("/api/dostk/stkinfo", "ka10001", map[string]string{"stk_cd": SymbolCode(symbol)})
@@ -135,7 +143,8 @@ func (c *KiwoomClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *KiwoomClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *KiwoomClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if interval != Day1 {
 		return nil, fmt.Errorf("키움 어댑터는 일봉(1d)만 지원합니다")
 	}
@@ -172,13 +181,15 @@ func (c *KiwoomClient) GetCandles(symbol string, interval CandleInterval, limit 
 	return candles, nil
 }
 
-func (c *KiwoomClient) GetCalendar() ([]MarketDay, error) {
+func (c *KiwoomClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
 	return krxCalendar(31), nil
 }
 
 // ------------------------------------------------------------------ account
 
-func (c *KiwoomClient) GetAccount() (Account, error) {
+func (c *KiwoomClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	deposit, err := c.call("/api/dostk/acnt", "kt00001", map[string]string{"qry_tp": "3"})
 	if err != nil {
 		return Account{}, err
@@ -195,7 +206,8 @@ func (c *KiwoomClient) GetAccount() (Account, error) {
 	return Account{AccountID: "kiwoom-mock", Currency: "KRW", Cash: cash, PortfolioValue: portfolio, Status: "ACTIVE"}, nil
 }
 
-func (c *KiwoomClient) GetHoldings() ([]Holding, error) {
+func (c *KiwoomClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	balance, err := c.balance()
 	if err != nil {
 		return nil, err
@@ -227,7 +239,8 @@ func (c *KiwoomClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *KiwoomClient) GetBuyingPower() (decimal.Decimal, error) {
+func (c *KiwoomClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
 	deposit, err := c.call("/api/dostk/acnt", "kt00001", map[string]string{"qry_tp": "3"})
 	if err != nil {
 		return decimal.Zero, err
@@ -240,7 +253,8 @@ func (c *KiwoomClient) GetBuyingPower() (decimal.Decimal, error) {
 
 // ------------------------------------------------------------------- orders
 
-func (c *KiwoomClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *KiwoomClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	apiID := "kt10001"
 	if request.Side == Buy {
 		apiID = "kt10000"
@@ -268,7 +282,8 @@ func (c *KiwoomClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *KiwoomClient) GetOrders() ([]Order, error) {
+func (c *KiwoomClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	open, err := c.openRows()
 	if err != nil {
 		return nil, err
@@ -280,7 +295,8 @@ func (c *KiwoomClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *KiwoomClient) GetOrder(orderID string) (Order, error) {
+func (c *KiwoomClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	key := strings.TrimLeft(orderID, "0")
 	open, err := c.openRows()
 	if err != nil {
@@ -310,7 +326,8 @@ func (c *KiwoomClient) GetOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: Canceled}, nil
 }
 
-func (c *KiwoomClient) CancelOrder(orderID string) (Order, error) {
+func (c *KiwoomClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	key := strings.TrimLeft(orderID, "0")
 	open, err := c.openRows()
 	if err != nil {
@@ -333,7 +350,8 @@ func (c *KiwoomClient) CancelOrder(orderID string) (Order, error) {
 	return Order{}, newOrderNotFoundError("order-not-found", "키움 미체결 주문을 찾을 수 없습니다: "+orderID)
 }
 
-func (c *KiwoomClient) GetFills() ([]Fill, error) {
+func (c *KiwoomClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	fillRows, err := c.fillRows()
 	if err != nil {
 		return nil, err
@@ -450,12 +468,13 @@ func (c *KiwoomClient) requestOnce(path, apiID string, jsonBody map[string]strin
 	return body, nil
 }
 
-func (c *KiwoomClient) getToken() (string, error) {
+func (c *KiwoomClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-5*time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	payload, _ := json.Marshal(map[string]string{
 		"grant_type": "client_credentials", "appkey": c.appkey, "secretkey": c.secretkey,

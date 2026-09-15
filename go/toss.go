@@ -64,6 +64,11 @@ func (c *TossClient) SetEnvironment(env TradingEnvironment) *TossClient {
 }
 func (c *TossClient) Environment() TradingEnvironment { return c.environment }
 
+// usage - 사용량 텔레메트리 핸들 (docs/telemetry.md). 환경은 호출 시점 값을 쓴다
+func (c *TossClient) usage() BrokerUsage {
+	return BrokerUsage{BrokerID: "toss", Environment: c.environment}
+}
+
 // SetWSURL - 실시간 웹소켓 주소를 직접 지정 (기본 wss://openapi-ws.tossinvest.com/ws/v1 — 모의 환경 없음).
 // 계정당 연결 2개(3번째가 오면 가장 오래된 것 종료), 구독 100개, 선언 5회/초, 180초 무송신 시 서버가 끊어 60초 PING. AsyncAPI 1.2.2 기반, 실측 전.
 func (c *TossClient) SetWSURL(wsURL string) *TossClient {
@@ -73,7 +78,11 @@ func (c *TossClient) SetWSURL(wsURL string) *TossClient {
 
 // OpenStream - 실시간 스트림(trade/orderbook:{kr,us}·personal:order 선언형 구독). REST 토큰을 그대로 쓰고 재발급하지 않는다.
 func (c *TossClient) OpenStream() MarketStream {
-	return newTossMarketStream(c.wsURL, c.getToken, c.account)
+	s := newTossMarketStream(c.wsURL, c.getToken, c.account)
+	s.withUsage(c.usage())
+	u := c.usage()
+	s.listeners.usage = &u
+	return s
 }
 func (c *TossClient) SetThrottle(d time.Duration) *TossClient {
 	c.limiter = newRateLimiter(d, 3, func(a int) time.Duration { return time.Duration(1<<(a-1)) * time.Second })
@@ -146,7 +155,8 @@ func tossObj(v any) map[string]any {
 
 // ------------------------------------------------------------------- market
 
-func (c *TossClient) GetQuotes(symbols []string) ([]Quote, error) {
+func (c *TossClient) GetQuotes(symbols []string) (_ []Quote, err error) {
+	defer c.usage().Measure("quotes")(&err)
 	caps := c.Capabilities()
 	requested := map[string]string{}
 	codes := make([]string, 0, len(symbols))
@@ -181,7 +191,8 @@ func (c *TossClient) GetQuotes(symbols []string) ([]Quote, error) {
 	return quotes, nil
 }
 
-func (c *TossClient) GetCandles(symbol string, interval CandleInterval, limit int) ([]Candle, error) {
+func (c *TossClient) GetCandles(symbol string, interval CandleInterval, limit int) (_ []Candle, err error) {
+	defer c.usage().Measure("candles")(&err)
 	if !c.Capabilities().CandleIntervals[interval] {
 		return nil, fmt.Errorf("토스 어댑터는 1m/1d 캔들만 지원합니다 (%s)", interval)
 	}
@@ -214,11 +225,15 @@ func (c *TossClient) GetCandles(symbol string, interval CandleInterval, limit in
 	return candles, nil
 }
 
-func (c *TossClient) GetCalendar() ([]MarketDay, error) { return krxCalendar(31), nil }
+func (c *TossClient) GetCalendar() (_ []MarketDay, err error) {
+	defer c.usage().Measure("calendar")(&err)
+	return krxCalendar(31), nil
+}
 
 // ------------------------------------------------------------------ account
 
-func (c *TossClient) GetAccount() (Account, error) {
+func (c *TossClient) GetAccount() (_ Account, err error) {
+	defer c.usage().Measure("account")(&err)
 	cash, err := c.buyingPower("KRW")
 	if err != nil {
 		return Account{}, err
@@ -240,7 +255,8 @@ func (c *TossClient) GetAccount() (Account, error) {
 	return Account{AccountID: acct, Currency: "KRW", Cash: cash, PortfolioValue: cash.Add(marketValue), Status: "ACTIVE"}, nil
 }
 
-func (c *TossClient) GetHoldings() ([]Holding, error) {
+func (c *TossClient) GetHoldings() (_ []Holding, err error) {
+	defer c.usage().Measure("holdings")(&err)
 	result, err := c.call("GET", "/api/v1/holdings", nil, nil, true)
 	if err != nil {
 		return nil, err
@@ -263,11 +279,15 @@ func (c *TossClient) GetHoldings() ([]Holding, error) {
 	return holdings, nil
 }
 
-func (c *TossClient) GetBuyingPower() (decimal.Decimal, error) { return c.buyingPower("KRW") }
+func (c *TossClient) GetBuyingPower() (_ decimal.Decimal, err error) {
+	defer c.usage().Measure("buying_power")(&err)
+	return c.buyingPower("KRW")
+}
 
 // ------------------------------------------------------------------- orders
 
-func (c *TossClient) CreateOrder(request CreateOrderRequest) (Order, error) {
+func (c *TossClient) CreateOrder(request CreateOrderRequest) (_ Order, err error) {
+	defer c.usage().Measure("create_order")(&err)
 	market, _ := ParseSymbol(request.Symbol)
 	code, err := c.Capabilities().SymbolCode(request.Symbol)
 	if err != nil {
@@ -314,7 +334,8 @@ func (c *TossClient) CreateOrder(request CreateOrderRequest) (Order, error) {
 	}, nil
 }
 
-func (c *TossClient) GetOrders() ([]Order, error) {
+func (c *TossClient) GetOrders() (_ []Order, err error) {
+	defer c.usage().Measure("get_orders")(&err)
 	result, err := c.call("GET", "/api/v1/orders", map[string]string{"status": "OPEN"}, nil, true)
 	if err != nil {
 		return nil, err
@@ -326,7 +347,8 @@ func (c *TossClient) GetOrders() ([]Order, error) {
 	return orders, nil
 }
 
-func (c *TossClient) GetOrder(orderID string) (Order, error) {
+func (c *TossClient) GetOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("get_order")(&err)
 	result, err := c.call("GET", "/api/v1/orders/"+orderID, nil, nil, true)
 	if err != nil {
 		return Order{}, err
@@ -334,7 +356,8 @@ func (c *TossClient) GetOrder(orderID string) (Order, error) {
 	return tossOrder(tossObj(result)), nil
 }
 
-func (c *TossClient) CancelOrder(orderID string) (Order, error) {
+func (c *TossClient) CancelOrder(orderID string) (_ Order, err error) {
+	defer c.usage().Measure("cancel_order")(&err)
 	if _, err := c.call("POST", "/api/v1/orders/"+orderID+"/cancel", nil, map[string]any{}, true); err != nil { // 새 orderId 발급 — 원주문 ID 유지
 		return Order{}, err
 	}
@@ -342,7 +365,8 @@ func (c *TossClient) CancelOrder(orderID string) (Order, error) {
 	return Order{OrderID: orderID, Status: PendingCancel, CanceledAt: &now}, nil
 }
 
-func (c *TossClient) GetFills() ([]Fill, error) {
+func (c *TossClient) GetFills() (_ []Fill, err error) {
+	defer c.usage().Measure("fills")(&err)
 	result, err := c.call("GET", "/api/v1/orders", map[string]string{"status": "CLOSED"}, nil, true)
 	if err != nil {
 		return nil, err
@@ -470,12 +494,13 @@ func (c *TossClient) requestOnce(method, path string, query map[string]string, j
 	return parsed, nil
 }
 
-func (c *TossClient) getToken() (string, error) {
+func (c *TossClient) getToken() (_ string, err error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Now().Before(c.tokenExpires.Add(-time.Minute)) {
 		return c.token, nil
 	}
+	defer c.usage().Measure("auth")(&err) // 실제 발급 경로만 센다 (캐시 히트는 제외)
 	c.limiter.throttle.wait()
 	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {c.clientID}, "client_secret": {c.clientSecret}}
 	status, body, err := httpJSON(c.http, "POST", c.baseURL+"/oauth2/token",
