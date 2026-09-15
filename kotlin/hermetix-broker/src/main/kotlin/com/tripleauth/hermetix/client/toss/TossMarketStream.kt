@@ -2,6 +2,7 @@ package com.tripleauth.hermetix.client.toss
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.tripleauth.hermetix.broker.BrokerUsage
 import com.tripleauth.hermetix.broker.MarketStream
 import com.tripleauth.hermetix.broker.MarketSymbol
 import com.tripleauth.hermetix.broker.OrderBookLevel
@@ -11,6 +12,7 @@ import com.tripleauth.hermetix.broker.OrderEvent
 import com.tripleauth.hermetix.broker.OrderEventListener
 import com.tripleauth.hermetix.broker.OrderEventType
 import com.tripleauth.hermetix.broker.ReconnectingWebSocket
+import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.TradeListener
 import com.tripleauth.hermetix.broker.TradeTick
 import com.tripleauth.hermetix.client.dto.OrderSide
@@ -55,7 +57,8 @@ class TossMarketStream(
     private val accountSeq: () -> String,
     heartbeatMillis: Long = 60_000,
     private val declareDelayMillis: Long = 200,
-) : ReconnectingWebSocket("toss", idleTimeoutMillis = 0, heartbeatMillis = heartbeatMillis), MarketStream {
+    usage: BrokerUsage? = null,
+) : ReconnectingWebSocket("toss", idleTimeoutMillis = 0, heartbeatMillis = heartbeatMillis, usage = usage), MarketStream {
 
     private val logger = KotlinLogging.logger { }
 
@@ -103,28 +106,33 @@ class TossMarketStream(
     // ------------------------------------------------------------------ subscribe
 
     override fun subscribeTrades(symbols: List<String>, listener: TradeListener) {
-        if (register(symbols, listener, tradeListeners)) scheduleDeclare()
+        val added = register(symbols, listener, tradeListeners)
+        usage?.streamSubscribed(StreamChannel.TRADES, added)
+        if (added > 0) scheduleDeclare()
     }
 
     override fun subscribeOrderBook(symbols: List<String>, listener: OrderBookListener) {
-        if (register(symbols, listener, bookListeners)) scheduleDeclare()
+        val added = register(symbols, listener, bookListeners)
+        usage?.streamSubscribed(StreamChannel.ORDER_BOOK, added)
+        if (added > 0) scheduleDeclare()
     }
 
     override fun subscribeOrderEvents(listener: OrderEventListener) {
         val first = orderListeners.isEmpty()
         orderListeners += listener
+        if (first) usage?.streamSubscribed(StreamChannel.ORDER_EVENTS)
         if (first) scheduleDeclare()
     }
 
-    /** true 면 새 topic 이 생겨 선언을 다시 보내야 한다 */
-    private fun <L> register(symbols: List<String>, listener: L, target: ConcurrentHashMap<String, CopyOnWriteArrayList<L>>): Boolean {
-        var changed = false
+    /** 새로 생긴 topic 수 — 0 보다 크면 선언을 다시 보내야 한다 */
+    private fun <L> register(symbols: List<String>, listener: L, target: ConcurrentHashMap<String, CopyOnWriteArrayList<L>>): Int {
+        var added = 0
         symbols.forEach { symbol ->
             val key = topicKey(symbol)
             requestedSymbols.putIfAbsent(key, symbol)
-            target.computeIfAbsent(key) { changed = true; CopyOnWriteArrayList() } += listener
+            target.computeIfAbsent(key) { added++; CopyOnWriteArrayList() } += listener
         }
-        return changed
+        return added
     }
 
     private fun scheduleDeclare() {
@@ -196,11 +204,13 @@ class TossMarketStream(
             "trade" -> parseTrade(topic, data)?.let { tick ->
                 val key = "${parts[1]}:${parts[2]}"
                 val out = requestedSymbols[key]?.let { tick.copy(symbol = it) } ?: tick
+                usage?.streamMessage(StreamChannel.TRADES)
                 tradeListeners[key]?.forEach { l -> runCatching { l.onTrade(out) }.onFailure { logger.error(it) { "toss stream: 리스너 오류 / ${out.symbol}" } } }
             }
             "orderbook" -> parseOrderBook(topic, data)?.let { book ->
                 val key = "${parts[1]}:${parts[2]}"
                 val out = requestedSymbols[key]?.let { book.copy(symbol = it) } ?: book
+                usage?.streamMessage(StreamChannel.ORDER_BOOK)
                 bookListeners[key]?.forEach { l -> runCatching { l.onOrderBook(out) }.onFailure { logger.error(it) { "toss stream: 호가 리스너 오류 / ${out.symbol}" } } }
             }
             "personal" -> {
@@ -208,6 +218,7 @@ class TossMarketStream(
                 val event = parseOrderEvent(data, filledSoFar[orderId]) ?: return
                 data.path("order").path("execution").path("filledQuantity").asText("").toBigDecimalOrNull()?.let { filledSoFar[orderId] = it }
                 if (event.type == OrderEventType.CANCELED || event.type == OrderEventType.REJECTED) filledSoFar.remove(orderId)
+                usage?.streamMessage(StreamChannel.ORDER_EVENTS)
                 orderListeners.forEach { l -> runCatching { l.onOrderEvent(event) }.onFailure { logger.error(it) { "toss stream: 주문 이벤트 리스너 오류 / ${event.orderId}" } } }
             }
         }

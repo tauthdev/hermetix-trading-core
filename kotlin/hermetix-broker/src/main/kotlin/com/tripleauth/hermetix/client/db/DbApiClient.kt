@@ -17,6 +17,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -86,6 +87,9 @@ class DbApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     private val restClient = RestClient.builder().baseUrl(properties.baseUrl).build()
 
     private val limiter = RateLimiter(
@@ -99,7 +103,7 @@ class DbApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val out = call(
                 "/api/v1/quote/kr-stock/inquiry/price",
@@ -119,7 +123,7 @@ class DbApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) { "DB 어댑터는 일봉(DAY_1)만 지원합니다." }
         val count = limit ?: 30
         val today = LocalDate.now(KST)
@@ -153,11 +157,11 @@ class DbApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val out = balance().path("Out")
         val portfolio = out.decimal("DpsastAmt") // 예탁자산 = 현금 + 평가
         val cash = out.decimalOrNull("Dps2") ?: (portfolio - (out.decimalOrNull("TotEvalAmt") ?: BigDecimal.ZERO))
@@ -171,7 +175,7 @@ class DbApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balance().path("Out1").mapNotNull { row ->
             val quantity = row.decimalOrNull("BalQty0") ?: row.decimalOrNull("BalQty") ?: return@mapNotNull null
             if (quantity.signum() <= 0) return@mapNotNull null
@@ -188,7 +192,7 @@ class DbApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         // 종목 무관 예수금잔고 (예수금 API 는 1 TPS — 틱당 1회만 호출된다)
         val out = call("/api/v1/trading/kr-stock/inquiry/acnt-deposit", emptyMap()).path("Out1")
         return BuyingPowerResponse(
@@ -200,7 +204,7 @@ class DbApiClient(
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) { "DB 어댑터는 LIMIT/MARKET 주문만 지원합니다" }
         val code = capabilities.symbolCode(request.symbol)
         val out = call(
@@ -235,14 +239,18 @@ class DbApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(historyRows().map { it.toOrderResponse() }.filter { it.status.isOpen })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
+        
         historyRows().firstOrNull { sameOrderNo(it.path("OrdNo").asText(), orderId) }?.toOrderResponse()
             ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED) // 당일 조회에 없으면 종료된 것으로 간주
+    }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val row = historyRows().firstOrNull { sameOrderNo(it.path("OrdNo").asText(), orderId) }
             ?: throw OrderNotFoundError("order-not-found", "DB 당일 주문에서 찾을 수 없습니다: $orderId")
         val remaining = row.remainingQty()
@@ -259,7 +267,7 @@ class DbApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.PENDING_CANCEL, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val fills = historyRows()
             .filter { (it.decimalOrNull("AllExecQty") ?: BigDecimal.ZERO).signum() > 0 }
             .map { row ->
@@ -362,7 +370,7 @@ class DbApiClient(
     // ------------------------------------------------------------------ stream
 
     /** 웹소켓은 REST 접근토큰을 매 구독 메시지 헤더에 싣는다 — 재접속 시 [token] 이 갱신한다 */
-    override fun openStream(): MarketStream = DbMarketStream(properties, objectMapper, ::token)
+    override fun openStream(): MarketStream = DbMarketStream(properties, objectMapper, ::token, usage)
 
     private fun token(): String {
         val cached = cachedToken
@@ -371,7 +379,7 @@ class DbApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
 

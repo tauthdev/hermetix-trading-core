@@ -17,6 +17,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -87,6 +88,9 @@ class LsApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     private val restClient = RestClient.builder().baseUrl(properties.baseUrl).build()
 
     private val limiter = RateLimiter(properties.throttleMillis, maxRetries = 3, backoffMillis = { attempt -> 1000L * attempt })
@@ -98,7 +102,7 @@ class LsApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val out = call("/stock/market-data", "t1102", "t1102InBlock", mapOf("shcode" to capabilities.symbolCode(symbol), "exchgubun" to properties.exchGubun))
                 .path("t1102OutBlock")
@@ -118,7 +122,7 @@ class LsApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) { "LS 어댑터는 일봉(DAY_1)만 지원합니다." }
         val count = limit ?: 30
         val today = LocalDate.now(KST)
@@ -148,11 +152,11 @@ class LsApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val summary = balance().path("t0424OutBlock")
         val cash = summary.decimalOrNull("sunamt1") ?: BigDecimal.ZERO // 추정 D2 예수금
         val portfolio = summary.decimalOrNull("sunamt")?.takeIf { it.signum() > 0 } // 추정 순자산
@@ -167,7 +171,7 @@ class LsApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balance().path("t0424OutBlock1").mapNotNull { row ->
             val quantity = row.decimalOrNull("janqty") ?: return@mapNotNull null
             if (quantity.signum() <= 0) return@mapNotNull null
@@ -184,7 +188,7 @@ class LsApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val out = call("/stock/accno", "CSPAQ12200", "CSPAQ12200InBlock1", mapOf("BalCreTp" to "0")).path("CSPAQ12200OutBlock2")
         return BuyingPowerResponse(
             accountId = "ls-${properties.environment.name.lowercase()}",
@@ -195,7 +199,7 @@ class LsApiClient(
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) { "LS 어댑터는 LIMIT/MARKET 주문만 지원합니다" }
         val code = capabilities.symbolCode(request.symbol)
         val out = call(
@@ -228,14 +232,18 @@ class LsApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(orderRows().map { it.toOrderResponse() }.filter { it.status.isOpen })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
+        
         orderRows().firstOrNull { sameOrderNo(it.path("ordno").asText(), orderId) }?.toOrderResponse()
             ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED) // 당일 조회에 없으면 종료로 간주
+    }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val row = orderRows().firstOrNull { sameOrderNo(it.path("ordno").asText(), orderId) }
             ?: throw OrderNotFoundError("order-not-found", "LS 당일 주문에서 찾을 수 없습니다: $orderId")
         val remaining = row.decimalOrNull("ordrem") ?: ((row.decimalOrNull("qty") ?: BigDecimal.ZERO) - (row.decimalOrNull("cheqty") ?: BigDecimal.ZERO))
@@ -251,7 +259,7 @@ class LsApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.PENDING_CANCEL, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val fills = orderRows()
             .filter { (it.decimalOrNull("cheqty") ?: BigDecimal.ZERO).signum() > 0 }
             .map { row ->
@@ -359,7 +367,7 @@ class LsApiClient(
     // ------------------------------------------------------------------ stream
 
     /** 실시간 스트림 — 매 메시지 헤더에 REST 토큰을 싣는다 (재접속 시 캐시/재발급 토큰) */
-    override fun openStream(): MarketStream = LsMarketStream(properties, objectMapper, ::token)
+    override fun openStream(): MarketStream = LsMarketStream(properties, objectMapper, ::token, usage)
 
     private fun token(): String {
         val cached = cachedToken
@@ -368,7 +376,7 @@ class LsApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
 

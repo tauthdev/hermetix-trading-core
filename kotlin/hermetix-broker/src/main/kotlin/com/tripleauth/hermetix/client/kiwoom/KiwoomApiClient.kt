@@ -15,6 +15,7 @@ import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.KrxTick
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -82,6 +83,9 @@ class KiwoomApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     private val restClient = RestClient.builder()
         .baseUrl(properties.resolvedBaseUrl())
         .build()
@@ -98,7 +102,7 @@ class KiwoomApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val node = call("/api/dostk/stkinfo", "ka10001", mapOf("stk_cd" to capabilities.symbolCode(symbol)))
             Quote(
@@ -116,7 +120,7 @@ class KiwoomApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) {
             "키움 어댑터는 일봉(DAY_1)만 지원합니다."
         }
@@ -143,11 +147,11 @@ class KiwoomApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val deposit = call("/api/dostk/acnt", "kt00001", mapOf("qry_tp" to "3"))
         val balance = balanceSummary()
 
@@ -167,7 +171,7 @@ class KiwoomApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balanceSummary().path("acnt_evlt_remn_indv_tot")
             .mapNotNull { row ->
                 val quantity = row.paddedDecimalOrNull("rmnd_qty") ?: return@mapNotNull null
@@ -185,7 +189,7 @@ class KiwoomApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val deposit = call("/api/dostk/acnt", "kt00001", mapOf("qry_tp" to "3"))
         return BuyingPowerResponse(
             accountId = "kiwoom-mock",
@@ -196,7 +200,7 @@ class KiwoomApiClient(
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) {
             "키움 어댑터는 LIMIT/MARKET 주문만 지원합니다"
         }
@@ -229,10 +233,12 @@ class KiwoomApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(openOrders().map { it.toOrderResponse() })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse {
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
         openOrders().firstOrNull { it.orderNo() == orderId }?.let { return it.toOrderResponse() }
 
         // 미체결에 없으면 체결 내역에서 확인
@@ -250,7 +256,7 @@ class KiwoomApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.CANCELED)
     }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val order = openOrders().firstOrNull { it.orderNo() == orderId }
             ?: throw OrderNotFoundError("order-not-found", "키움 미체결 주문을 찾을 수 없습니다: $orderId")
 
@@ -267,7 +273,7 @@ class KiwoomApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.CANCELED, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val result = fills().map { row ->
             Fill(
                 fillId = row.path("ord_no").asText(),
@@ -348,7 +354,7 @@ class KiwoomApiClient(
     // ------------------------------------------------------------------ stream
 
     /** 웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 [token] 이 갱신한다 */
-    override fun openStream(): MarketStream = KiwoomMarketStream(properties, objectMapper, ::token)
+    override fun openStream(): MarketStream = KiwoomMarketStream(properties, objectMapper, ::token, usage)
 
     private fun token(): String {
         val cached = cachedToken
@@ -359,7 +365,7 @@ class KiwoomApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
             return cached.first

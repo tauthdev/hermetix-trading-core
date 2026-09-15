@@ -12,6 +12,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.ApiError
@@ -107,6 +108,13 @@ class NextApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
+    init {
+        tokenManager.usage = usage
+    }
+
     init {
         // 환경은 키 프리픽스가 결정한다 — 설정과 어긋나면 기동 실패 (실전 키를 모의로 착각하는 사고 방지)
         val expectedPrefix = if (properties.environment == TradingEnvironment.LIVE) "pk_live_" else "pk_test_"
@@ -124,7 +132,7 @@ class NextApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val codes = symbols.map { capabilities.symbolCode(it) }
         val raw: NextQuotesResponse = get { it.path("/v1/market/quotes").queryParam("symbols", codes.joinToString(",")).build() }
         val requestedByCode = symbols.associateBy { capabilities.symbolCode(it) }
@@ -148,7 +156,7 @@ class NextApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         val code = capabilities.symbolCode(symbol)
         val raw: NextCandlesResponse = get {
             it.path("/v1/market/candles")
@@ -170,7 +178,7 @@ class NextApiClient(
         )
     }
 
-    override fun getCalendar(): CalendarResponse {
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") {
         val raw: NextCalendarResponse = get { it.path("/v1/market/calendar").build() }
         return CalendarResponse(raw.calendar.map { toMarketDay(it) })
     }
@@ -202,7 +210,7 @@ class NextApiClient(
      * v1.3 계좌 응답에는 예수금(`cashAmount`)만 있다. 공통 모델의 `portfolioValue`(총평가)는
      * 예수금 + 보유 평가금액 합계로 계산한다 — 보유 조회 1회가 추가된다.
      */
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val raw: NextAccountResponse = get(account = true) { it.path("/v1/account").build() }
         val holdings = getHoldings()
         val totalMarketValue = holdings.summary?.totalMarketValue ?: BigDecimal.ZERO
@@ -216,7 +224,7 @@ class NextApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val raw: NextHoldingsResponse = get(account = true) { it.path("/v1/account/holdings").build() }
         val holdings = raw.holdings.map { h ->
             Holding(
@@ -238,7 +246,7 @@ class NextApiClient(
         )
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val raw: NextBuyingPowerResponse = get(account = true) { it.path("/v1/account/buying-power").build() }
         return BuyingPowerResponse(accountId = raw.accountId, currency = raw.currency ?: "USD", buyingPower = raw.buyingPower)
     }
@@ -261,7 +269,7 @@ class NextApiClient(
             account = true,
         )
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         val raw: NextOrderResponse = exchange(
             HttpMethod.POST, { it.path("/v1/orders").build() },
             NextOrderRequest(
@@ -280,22 +288,22 @@ class NextApiClient(
         return raw.toOrderResponse()
     }
 
-    override fun getOrders(): OrdersResponse {
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
         val raw: NextOrdersResponse = get(account = true) { it.path("/v1/orders").build() }
         return OrdersResponse(raw.orders.map { it.toOrderResponse() })
     }
 
-    override fun getOrder(orderId: String): OrderResponse {
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
         val raw: NextOrderResponse = get(account = true) { it.path("/v1/orders/{orderId}").build(orderId) }
         return raw.toOrderResponse()
     }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val raw: NextOrderResponse = exchange(HttpMethod.DELETE, { it.path("/v1/orders/{orderId}").build(orderId) }, null, account = true)
         return raw.toOrderResponse()
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val raw: NextFillsResponse = get(account = true) { it.path("/v1/orders/fills").build() }
         return FillsResponse(
             raw.fills.map { f ->

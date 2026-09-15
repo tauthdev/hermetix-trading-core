@@ -16,6 +16,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -87,8 +88,11 @@ class NhApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     /** 실시간 스트림 — 토큰은 REST 와 같은 캐시를 쓴다 (운영 호스트 발급, 모의·운영 공용) */
-    override fun openStream(): MarketStream = NhMarketStream(properties, objectMapper, ::token)
+    override fun openStream(): MarketStream = NhMarketStream(properties, objectMapper, ::token, usage)
 
     private val restClient = RestClient.builder().baseUrl(properties.resolvedBaseUrl()).build()
     private val authClient = RestClient.builder().baseUrl(properties.authUrl).build()
@@ -107,7 +111,7 @@ class NhApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val out = call("/krstock/quote/v1/currentPrice", mapOf("market_cd" to properties.marketCd, "iem_cd" to capabilities.symbolCode(symbol)))
                 .path("Output_0")
@@ -128,7 +132,7 @@ class NhApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) { "NH 어댑터는 일봉(DAY_1)만 지원합니다." }
         val count = limit ?: 30
         val rows = call(
@@ -152,11 +156,11 @@ class NhApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val summary = balance().path("Output_0")
         val cash = summary.decimal("dca")
         val portfolio = summary.decimalOrNull("tot_aet_amt")?.takeIf { it.signum() > 0 }
@@ -171,7 +175,7 @@ class NhApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balance().path("Output_1").mapNotNull { row ->
             val quantity = row.decimalOrNull("itg_bnc_qty") ?: return@mapNotNull null
             if (quantity.signum() <= 0) return@mapNotNull null
@@ -188,7 +192,7 @@ class NhApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val summary = balance().path("Output_0")
         return BuyingPowerResponse(
             accountId = accountNo(),
@@ -199,7 +203,7 @@ class NhApiClient(
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) { "NH 어댑터는 LIMIT/MARKET 주문만 지원합니다" }
         val code = capabilities.symbolCode(request.symbol)
         val path = if (request.side == OrderSide.BUY) "/krstock/order/v1/cashBuy" else "/krstock/order/v1/cashSell"
@@ -236,14 +240,18 @@ class NhApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(executionRows().map { it.toOrderResponse() }.filter { it.status.isOpen })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
+        
         executionRows().firstOrNull { sameOrderNo(it.path("itg_orr_no").asText(), orderId) }?.toOrderResponse()
             ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED) // 당일 조회에 없으면 종료된 것으로 간주
+    }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val row = executionRows().firstOrNull { sameOrderNo(it.path("itg_orr_no").asText(), orderId) }
             ?: throw OrderNotFoundError("order-not-found", "NH 당일 주문에서 찾을 수 없습니다: $orderId")
         // 취소는 원시장주문번호(org_mkt_orr_no)와 종목코드가 필요하다
@@ -259,7 +267,7 @@ class NhApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.CANCELED, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val fills = executionRows()
             .filter { (it.decimalOrNull("tot_cns_qty") ?: BigDecimal.ZERO).signum() > 0 }
             .map { row ->
@@ -386,7 +394,7 @@ class NhApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
 

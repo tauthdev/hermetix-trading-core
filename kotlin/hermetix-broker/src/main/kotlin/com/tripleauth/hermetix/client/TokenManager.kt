@@ -32,6 +32,10 @@ class TokenManager(
     @Volatile
     private var cached: CachedToken? = null
 
+    /** 사용량 텔레메트리 핸들 — [NextApiClient] 가 붙인다. 토큰 발급이 `auth` op 으로 세어진다 (docs/telemetry.md) */
+    @Volatile
+    var usage: com.tripleauth.hermetix.broker.BrokerUsage? = null
+
     fun getToken(): String {
         val current = cached
         if (current != null && current.expiresAt.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
@@ -47,6 +51,11 @@ class TokenManager(
 
     @Synchronized
     private fun refresh(): String {
+        val u = usage
+        return if (u == null) doRefresh() else u.measure("auth") { doRefresh() }
+    }
+
+    private fun doRefresh(): String {
         val current = cached
         if (current != null && current.expiresAt.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) {
             return current.accessToken

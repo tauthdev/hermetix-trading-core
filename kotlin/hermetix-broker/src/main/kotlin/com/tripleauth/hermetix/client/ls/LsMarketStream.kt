@@ -2,6 +2,7 @@ package com.tripleauth.hermetix.client.ls
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.tripleauth.hermetix.broker.BrokerUsage
 import com.tripleauth.hermetix.broker.KrxCalendar
 import com.tripleauth.hermetix.broker.MarketStream
 import com.tripleauth.hermetix.broker.MarketSymbol
@@ -12,6 +13,7 @@ import com.tripleauth.hermetix.broker.OrderEvent
 import com.tripleauth.hermetix.broker.OrderEventListener
 import com.tripleauth.hermetix.broker.OrderEventType
 import com.tripleauth.hermetix.broker.ReconnectingWebSocket
+import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.TradeListener
 import com.tripleauth.hermetix.broker.TradeTick
 import com.tripleauth.hermetix.client.dto.OrderSide
@@ -54,7 +56,8 @@ class LsMarketStream(
     private val properties: LsApiProperties,
     private val objectMapper: ObjectMapper,
     private val token: () -> String,
-) : ReconnectingWebSocket("ls", idleTimeoutMillis = 0), MarketStream {
+    usage: BrokerUsage? = null,
+) : ReconnectingWebSocket("ls", idleTimeoutMillis = 0, usage = usage), MarketStream {
 
     private val logger = KotlinLogging.logger { }
 
@@ -78,6 +81,7 @@ class LsMarketStream(
 
     override fun subscribeTrades(symbols: List<String>, listener: TradeListener) {
         val newCodes = register(symbols, listener, tradeListeners)
+        usage?.streamSubscribed(StreamChannel.TRADES, newCodes.size)
         if (newCodes.isNotEmpty() && isSocketOpen) {
             val t = token()
             newCodes.forEach { code -> TRADE_TRS.forEach { send(message(t, TR_TYPE_SUBSCRIBE, it, code)) } }
@@ -86,6 +90,7 @@ class LsMarketStream(
 
     override fun subscribeOrderBook(symbols: List<String>, listener: OrderBookListener) {
         val newCodes = register(symbols, listener, bookListeners)
+        usage?.streamSubscribed(StreamChannel.ORDER_BOOK, newCodes.size)
         if (newCodes.isNotEmpty() && isSocketOpen) {
             val t = token()
             newCodes.forEach { code -> BOOK_TRS.forEach { send(message(t, TR_TYPE_SUBSCRIBE, it, code)) } }
@@ -95,6 +100,7 @@ class LsMarketStream(
     override fun subscribeOrderEvents(listener: OrderEventListener) {
         val first = orderListeners.isEmpty()
         orderListeners += listener
+        if (first) usage?.streamSubscribed(StreamChannel.ORDER_EVENTS)
         if (first && isSocketOpen) {
             val t = token()
             ORDER_TRS.forEach { send(message(t, TR_TYPE_ACCOUNT_REGISTER, it, "")) }
@@ -155,14 +161,17 @@ class LsMarketStream(
             in TRADE_TRS -> parseTrade(node)?.let { tick ->
                 val symbol = requestedSymbols[tick.symbol] ?: tick.symbol
                 val out = if (symbol == tick.symbol) tick else tick.copy(symbol = symbol)
+                usage?.streamMessage(StreamChannel.TRADES)
                 tradeListeners[tick.symbol]?.forEach { l -> runCatching { l.onTrade(out) }.onFailure { logger.error(it) { "ls stream: 리스너 오류 / $symbol" } } }
             }
             in BOOK_TRS -> parseOrderBook(node)?.let { tick ->
                 val symbol = requestedSymbols[tick.symbol] ?: tick.symbol
                 val out = if (symbol == tick.symbol) tick else tick.copy(symbol = symbol)
+                usage?.streamMessage(StreamChannel.ORDER_BOOK)
                 bookListeners[tick.symbol]?.forEach { l -> runCatching { l.onOrderBook(out) }.onFailure { logger.error(it) { "ls stream: 호가 리스너 오류 / $symbol" } } }
             }
             in ORDER_TRS -> parseOrderEvents(node).forEach { event ->
+                usage?.streamMessage(StreamChannel.ORDER_EVENTS)
                 orderListeners.forEach { l -> runCatching { l.onOrderEvent(event) }.onFailure { logger.error(it) { "ls stream: 주문 통보 리스너 오류 / ${event.orderId}" } } }
             }
             else -> logger.debug { "ls stream: unknown tr $trCd" }

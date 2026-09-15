@@ -19,6 +19,7 @@ import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.StreamChannel
 import com.tripleauth.hermetix.broker.StreamingBrokerClient
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -94,6 +95,9 @@ class TossApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     private val restClient = RestClient.builder().baseUrl(properties.baseUrl).build()
 
     private val limiter = RateLimiter(
@@ -110,7 +114,7 @@ class TossApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val requestedByCode = symbols.associateBy { capabilities.symbolCode(it) }
         val result = call(HttpMethod.GET, "/api/v1/prices?symbols=${requestedByCode.keys.joinToString(",")}")
         val quotes = result.mapNotNull { q ->
@@ -129,7 +133,7 @@ class TossApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval in capabilities.candleIntervals) { "토스 어댑터는 1m/1d 캔들만 지원합니다 (${interval.value})" }
         val count = (limit ?: 100).coerceIn(1, 200)
         val result = call(HttpMethod.GET, "/api/v1/candles?symbol=${capabilities.symbolCode(symbol)}&interval=${interval.value}&count=$count")
@@ -145,11 +149,11 @@ class TossApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val cash = buyingPower("KRW")
         val holdings = getHoldings()
         return AccountResponse(
@@ -162,7 +166,7 @@ class TossApiClient(
         )
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val result = call(HttpMethod.GET, "/api/v1/holdings", account = true)
         val holdings = result.path("items").mapNotNull { h ->
             val quantity = h.decimalOrNull("quantity") ?: return@mapNotNull null
@@ -187,12 +191,14 @@ class TossApiClient(
         )
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse =
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
+        
         BuyingPowerResponse(accountId = accountSeq(), currency = "KRW", buyingPower = buyingPower("KRW"))
+    }
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) { "토스 어댑터는 LIMIT/MARKET 주문만 지원합니다" }
         val parsed = MarketSymbol.parse(request.symbol)
         val code = capabilities.symbolCode(request.symbol)
@@ -228,20 +234,24 @@ class TossApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(call(HttpMethod.GET, "/api/v1/orders?status=OPEN", account = true).path("orders").map { it.toOrderResponse() })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
+        
         call(HttpMethod.GET, "/api/v1/orders/$orderId", account = true).toOrderResponse()
+    }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         // 취소는 새 orderId 를 발급한다 — 호출자에게는 원주문 ID 를 유지해 돌려준다
         val result = call(HttpMethod.POST, "/api/v1/orders/$orderId/cancel", body = emptyMap<String, Any>(), account = true)
         logger.debug { "toss cancel accepted / original=$orderId cancelOrderId=${result.path("orderId").asText()}" }
         return OrderResponse(orderId = orderId, status = OrderStatus.PENDING_CANCEL, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         // 체결 엔드포인트가 없다 — 종료 주문의 execution 집계를 주문 단위 체결로 돌려준다
         val orders = call(HttpMethod.GET, "/api/v1/orders?status=CLOSED", account = true).path("orders")
         val fills = orders.mapNotNull { o ->
@@ -292,7 +302,7 @@ class TossApiClient(
     // ------------------------------------------------------------------ stream
 
     /** 웹소켓은 REST 와 같은 토큰을 핸드셰이크 헤더에 싣고, 주문 이벤트 구독은 [accountSeq] 로 계좌를 고른다 */
-    override fun openStream(): MarketStream = TossMarketStream(properties, objectMapper, ::token, ::accountSeq)
+    override fun openStream(): MarketStream = TossMarketStream(properties, objectMapper, ::token, ::accountSeq, usage = usage)
 
     /** 계좌 순번 — 설정이 비어 있으면 `/api/v1/accounts` 의 첫 BROKERAGE 계좌 */
     internal fun accountSeq(): String {
@@ -358,7 +368,7 @@ class TossApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
 

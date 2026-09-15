@@ -15,6 +15,7 @@ import com.tripleauth.hermetix.broker.OrderNotFoundError
 import com.tripleauth.hermetix.broker.RateLimitError
 import com.tripleauth.hermetix.broker.RateLimiter
 import com.tripleauth.hermetix.broker.TradingEnvironment
+import com.tripleauth.hermetix.broker.UsageTelemetry
 import com.tripleauth.hermetix.broker.symbolCode
 import com.tripleauth.hermetix.client.dto.AccountResponse
 import com.tripleauth.hermetix.client.dto.BuyingPowerResponse
@@ -81,6 +82,9 @@ class KbApiClient(
 
     override val environment: TradingEnvironment = properties.environment
 
+
+    private val usage = UsageTelemetry.forBroker(capabilities.brokerId, environment)
+
     private val restClient = RestClient.builder().baseUrl(properties.baseUrl).build()
 
     private val limiter = RateLimiter(properties.throttleMillis, maxRetries = 3, backoffMillis = { attempt -> 1000L * attempt })
@@ -90,7 +94,7 @@ class KbApiClient(
 
     // ------------------------------------------------------------------ market
 
-    override fun getQuotes(symbols: List<String>): QuotesResponse {
+    override fun getQuotes(symbols: List<String>): QuotesResponse = usage.measure("quotes") {
         val quotes = symbols.map { symbol ->
             val out = call("/api/v1/ivu10140", mapOf("excg_clsf" to properties.excgClsf, "shrt_cd" to capabilities.symbolCode(symbol)))
             val sign = out.text("bdy_cmpr_ccd")
@@ -109,7 +113,7 @@ class KbApiClient(
         return QuotesResponse(quotes)
     }
 
-    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse {
+    override fun getCandles(symbol: String, interval: CandleInterval, limit: Int?): CandlesResponse = usage.measure("candles") {
         require(interval == CandleInterval.DAY_1) { "KB 어댑터는 일봉(DAY_1)만 지원합니다." }
         val count = limit ?: 30
         val out = call(
@@ -133,11 +137,11 @@ class KbApiClient(
         return CandlesResponse(symbol = symbol, interval = interval.value, candles = candles)
     }
 
-    override fun getCalendar(): CalendarResponse = KrxCalendar.synthesize()
+    override fun getCalendar(): CalendarResponse = usage.measure("calendar") { KrxCalendar.synthesize() }
 
     // ----------------------------------------------------------------- account
 
-    override fun getAccount(): AccountResponse {
+    override fun getAccount(): AccountResponse = usage.measure("account") {
         val out = balance()
         val cash = out.decimal("dy_tfnd") // 일예수금
         val portfolio = out.decimalOrNull("nt_asts_val_amt")?.takeIf { it.signum() > 0 } // 순자산평가금액
@@ -145,7 +149,7 @@ class KbApiClient(
         return AccountResponse(accountId = "kb-live", name = null, currency = "KRW", cash = cash, portfolioValue = portfolio, status = "ACTIVE")
     }
 
-    override fun getHoldings(): HoldingsResponse {
+    override fun getHoldings(): HoldingsResponse = usage.measure("holdings") {
         val holdings = balance().path("Record1").mapNotNull { row ->
             val quantity = listOfNotNull(row.decimalOrNull("ec_q"), row.decimalOrNull("hld_q")).maxOrNull() ?: return@mapNotNull null
             if (quantity.signum() <= 0) return@mapNotNull null
@@ -162,14 +166,14 @@ class KbApiClient(
         return HoldingsResponse(holdings)
     }
 
-    override fun getBuyingPower(): BuyingPowerResponse {
+    override fun getBuyingPower(): BuyingPowerResponse = usage.measure("buying_power") {
         val out = call("/api/v1/ssqm1802", mapOf("bnd_mktio_ccd" to "1", "is_no" to ""))
         return BuyingPowerResponse(accountId = "kb-live", currency = "KRW", buyingPower = out.decimalOrNull("ordr_psbl_csh") ?: out.decimal("ordr_psbl_tl_amt"))
     }
 
     // ------------------------------------------------------------------ orders
 
-    override fun createOrder(request: CreateOrderRequest): OrderResponse {
+    override fun createOrder(request: CreateOrderRequest): OrderResponse = usage.measure("create_order") {
         require(request.orderType == OrderType.LIMIT || request.orderType == OrderType.MARKET) { "KB 어댑터는 LIMIT/MARKET 주문만 지원합니다" }
         val code = capabilities.symbolCode(request.symbol)
         val path = if (request.side == OrderSide.BUY) "/api/v1/ssam1802" else "/api/v1/ssam1801"
@@ -199,14 +203,18 @@ class KbApiClient(
         )
     }
 
-    override fun getOrders(): OrdersResponse =
+    override fun getOrders(): OrdersResponse = usage.measure("get_orders") {
+        
         OrdersResponse(orderRows().map { it.toOrderResponse() }.filter { it.status.isOpen })
+    }
 
-    override fun getOrder(orderId: String): OrderResponse =
+    override fun getOrder(orderId: String): OrderResponse = usage.measure("get_order") {
+        
         orderRows().firstOrNull { sameOrderNo(it.text("ordr_no"), orderId) }?.toOrderResponse()
             ?: OrderResponse(orderId = orderId, status = OrderStatus.CANCELED)
+    }
 
-    override fun cancelOrder(orderId: String): OrderResponse {
+    override fun cancelOrder(orderId: String): OrderResponse = usage.measure("cancel_order") {
         val row = orderRows().firstOrNull { sameOrderNo(it.text("ordr_no"), orderId) }
             ?: throw OrderNotFoundError("order-not-found", "KB 당일 주문에서 찾을 수 없습니다: $orderId")
         val remaining = row.decimalOrNull("nccls_q") ?: ((row.decimalOrNull("ordr_q") ?: BigDecimal.ZERO) - (row.decimalOrNull("tl_ccls_q") ?: BigDecimal.ZERO))
@@ -219,7 +227,7 @@ class KbApiClient(
         return OrderResponse(orderId = orderId, status = OrderStatus.PENDING_CANCEL, canceledAt = Instant.now())
     }
 
-    override fun getFills(): FillsResponse {
+    override fun getFills(): FillsResponse = usage.measure("fills") {
         val fills = orderRows()
             .filter { (it.decimalOrNull("tl_ccls_q") ?: BigDecimal.ZERO).signum() > 0 }
             .map { row ->
@@ -337,7 +345,7 @@ class KbApiClient(
     }
 
     @Synchronized
-    private fun refreshToken(): String {
+    private fun refreshToken(): String = usage.measure("auth") {
         val cached = cachedToken
         if (cached != null && cached.second.isAfter(Instant.now().plusSeconds(properties.tokenRefreshMarginSeconds))) return cached.first
 
