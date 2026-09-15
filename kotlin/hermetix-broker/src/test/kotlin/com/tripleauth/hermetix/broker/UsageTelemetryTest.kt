@@ -141,4 +141,18 @@ class UsageTelemetryTest {
         assertThat(UUID.fromString(UsageTelemetry.installationId)).isNotNull()
         assertThat(UsageTelemetry.installationId).isEqualTo(UsageTelemetry.installationId)
     }
+
+    @Test
+    fun `요청 서명은 계약대로 HMAC-SHA256(key, timestamp + 개행 + body) 의 소문자 hex 다`() {
+        val body = """{"schema":1}"""
+        val sig = UsageTelemetry.sign(body, 1_700_000_000L)
+        assertThat(sig).hasSize(64).matches("[0-9a-f]{64}")
+        // 독립 계산과 일치 (javax.crypto 직접 사용)
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(UsageTelemetry.SIGNING_KEY.toByteArray(), "HmacSHA256"))
+        val expected = mac.doFinal("1700000000\n$body".toByteArray()).joinToString("") { "%02x".format(it) }
+        assertThat(sig).isEqualTo(expected)
+        assertThat(UsageTelemetry.sign(body, 1_700_000_001L)).isNotEqualTo(sig)
+        println("SIGNATURE_VECTOR body=$body ts=1700000000 sig=$sig")
+    }
 }

@@ -30,6 +30,9 @@ object UsageTelemetry {
     const val ENDPOINT = "https://service.hermetix.dev/v1/usage"
     const val SCHEMA = 1
     const val SDK_LANGUAGE = "kotlin"
+    /** 요청 서명 키 (docs/telemetry.md "요청 서명") — 공개 SDK 라 비밀이 아니며 스팸·스캐너를 거르는 문턱이다 */
+    const val SIGNING_KEY_ID = "v1"
+    const val SIGNING_KEY = "d97f20cb942540462ea83648ee30a9786bd658b3dc813f74ef011845da258503"
     private const val FLUSH_INTERVAL_SECONDS = 60L
     private const val LATENCY_SAMPLES = 256
 
@@ -118,11 +121,23 @@ object UsageTelemetry {
     private fun bucket(brokerId: String, environment: TradingEnvironment): BucketStats =
         buckets.computeIfAbsent(BucketKey(Instant.now().truncatedTo(ChronoUnit.HOURS), brokerId, environment.name)) { BucketStats() }
 
+    /** `hex(HMAC-SHA256(key, timestamp + "\n" + body))` — 계약의 요청 서명 */
+    fun sign(body: String, timestampSeconds: Long): String {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(SIGNING_KEY.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val digest = mac.doFinal("$timestampSeconds\n$body".toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     private fun post(body: String) {
+        val timestamp = Instant.now().epochSecond
         val request = HttpRequest.newBuilder(URI.create(ENDPOINT))
             .timeout(Duration.ofSeconds(3))
             .header("Content-Type", "application/json")
             .header("User-Agent", "hermetix-$SDK_LANGUAGE/$sdkVersion")
+            .header("X-Hermetix-Key-Id", SIGNING_KEY_ID)
+            .header("X-Hermetix-Timestamp", timestamp.toString())
+            .header("X-Hermetix-Signature", sign(body, timestamp))
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()
         httpClient.send(request, HttpResponse.BodyHandlers.discarding())

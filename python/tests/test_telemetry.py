@@ -233,3 +233,48 @@ def test_kis_stream_counts_subscriptions_and_messages():
     streams = {s["channel"]: s for s in bucket["streams"]}
     assert streams["TRADES"] == {"channel": "TRADES", "subscriptions": 2, "messages": 1}
     assert bucket["reconnects"] == 0
+
+
+# ---------------------------------------------------------------- 요청 서명 (docs/telemetry.md "요청 서명")
+
+def test_sign_matches_contract_vector():
+    from hermetix import telemetry as tm
+    sig = tm.sign('{"schema":1}', 1700000000)
+    assert sig == "c0ce56d2a2b120597403cc70160e8db7ae60d242916857319ecc5845522739d2"
+    assert len(sig) == 64 and sig == sig.lower()
+    assert tm.sign('{"schema":1}', 1700000001) != sig
+    assert tm.SIGNING_KEY_ID == "v1"
+
+
+def test_default_transport_sends_signature_headers(monkeypatch):
+    import urllib.request
+    from hermetix import telemetry as tm
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    body = '{"schema":1}'
+    tm._post(body)
+
+    req = captured["request"]
+    assert captured["timeout"] == 3
+    assert req.full_url == tm.ENDPOINT
+    assert req.get_header("X-hermetix-key-id") == "v1"
+    ts = int(req.get_header("X-hermetix-timestamp"))
+    assert abs(ts - int(__import__("time").time())) < 5
+    assert req.get_header("X-hermetix-signature") == tm.sign(body, ts)
+    assert req.get_header("Content-type") == "application/json"
+    assert req.get_header("User-agent").startswith("hermetix-python/")
+

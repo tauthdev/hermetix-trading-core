@@ -9,6 +9,8 @@ hermetix-service 로 보낸다. 계약(필드·전송 규칙·보내지 않는 �
 from __future__ import annotations
 
 import atexit
+import hashlib
+import hmac
 import json
 import logging
 import threading
@@ -28,6 +30,9 @@ from .models import StreamChannel, TradingEnvironment
 ENDPOINT = "https://service.hermetix.dev/v1/usage"
 SCHEMA = 1
 SDK_LANGUAGE = "python"
+# 요청 서명 키 (docs/telemetry.md "요청 서명") — 공개 SDK 라 비밀이 아니며 스팸·스캐너를 거르는 문턱이다
+SIGNING_KEY_ID = "v1"
+SIGNING_KEY = "d97f20cb942540462ea83648ee30a9786bd658b3dc813f74ef011845da258503"
 FLUSH_INTERVAL_SECONDS = 60.0
 LATENCY_SAMPLES = 256
 
@@ -123,10 +128,23 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def sign(body: str, timestamp_seconds: int) -> str:
+    """`hex(HMAC-SHA256(key, timestamp + "\\n" + body))` — 계약의 요청 서명 (소문자 hex 64자)."""
+    message = f"{timestamp_seconds}\n{body}".encode("utf-8")
+    return hmac.new(SIGNING_KEY.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
 def _post(body: str) -> None:
+    timestamp = int(time.time())
     request = urllib.request.Request(
         ENDPOINT, data=body.encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": f"hermetix-{SDK_LANGUAGE}/{sdk_version()}"})
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": f"hermetix-{SDK_LANGUAGE}/{sdk_version()}",
+            "X-Hermetix-Key-Id": SIGNING_KEY_ID,
+            "X-Hermetix-Timestamp": str(timestamp),
+            "X-Hermetix-Signature": sign(body, timestamp),
+        })
     with urllib.request.urlopen(request, timeout=3):
         pass  # 응답 본문은 읽지 않는다
 
