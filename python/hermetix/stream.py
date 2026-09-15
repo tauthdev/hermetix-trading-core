@@ -28,8 +28,10 @@ logger = logging.getLogger("hermetix")
 class ReconnectingWebSocket(ABC):
 
     def __init__(self, name: str, max_backoff_seconds: float = 30.0, idle_timeout_seconds: float = 90.0,
-                 connect_timeout_seconds: float = 10.0, heartbeat_seconds: float = 0.0):
+                 connect_timeout_seconds: float = 10.0, heartbeat_seconds: float = 0.0, usage=None):
         self._name = name
+        # 사용량 텔레메트리 핸들(BrokerUsage) - 재접속 횟수를 센다 (docs/telemetry.md). None 이면 세지 않는다
+        self._usage = usage
         self._max_backoff = max_backoff_seconds
         self._idle_timeout = idle_timeout_seconds
         self._heartbeat = heartbeat_seconds
@@ -166,6 +168,8 @@ class ReconnectingWebSocket(ABC):
             if self._closed:
                 break
             delay = min(1.0 * (2 ** min(self._attempt, 10)), self._max_backoff)
+            if self._attempt > 0 and self._usage is not None:
+                self._usage.reconnected()  # 첫 접속 실패 재시도부터 셈 (정상 첫 접속은 재접속이 아님)
             self._attempt += 1
             logger.info("%s stream: reconnect in %.0fms", self._name, delay * 1000)
             await asyncio.sleep(delay)

@@ -27,6 +27,7 @@ from typing import Callable
 
 from ..broker import KST, MarketStream, OrderBookListener, OrderEventListener, TradeListener
 from ..models import OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick, symbol_code
+from ..models import StreamChannel
 from ..stream import ReconnectingWebSocket
 
 logger = logging.getLogger("hermetix")
@@ -174,8 +175,8 @@ def parse_kiwoom_order_events(obj: dict, today: date | None = None) -> list[Orde
 
 class KiwoomMarketStream(ReconnectingWebSocket, MarketStream):
 
-    def __init__(self, ws_url: str, token: Callable[[], str]):
-        super().__init__("kiwoom")
+    def __init__(self, ws_url: str, token: Callable[[], str], usage=None):
+        super().__init__("kiwoom", usage=usage)
         self._ws_url = ws_url
         self._token = token
         self._lock = threading.Lock()
@@ -213,11 +214,15 @@ class KiwoomMarketStream(ReconnectingWebSocket, MarketStream):
 
     def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None:
         new_codes = self._register(symbols, listener, self._trade_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.TRADES, len(new_codes))
         if new_codes and self.is_connected:
             self.send(self._register_message(new_codes, TYPE_TRADE))
 
     def subscribe_order_book(self, symbols: list[str], listener: OrderBookListener) -> None:
         new_codes = self._register(symbols, listener, self._book_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_BOOK, len(new_codes))
         if new_codes and self.is_connected:
             self.send(self._register_message(new_codes, TYPE_ORDER_BOOK))
 
@@ -225,6 +230,8 @@ class KiwoomMarketStream(ReconnectingWebSocket, MarketStream):
         with self._lock:
             first = not self._order_listeners
             self._order_listeners.append(listener)
+        if first and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_EVENTS)
         if first and self.is_connected:
             self.send(self._register_message([""], TYPE_ORDER_EVENTS))
 
@@ -272,6 +279,8 @@ class KiwoomMarketStream(ReconnectingWebSocket, MarketStream):
             with self._lock:
                 listeners = list(self._order_listeners)
             for event in parse_kiwoom_order_events(node):
+                if self._usage is not None:
+                    self._usage.stream_message(StreamChannel.ORDER_EVENTS)
                 for listener in listeners:
                     try:
                         listener(event)
@@ -281,6 +290,8 @@ class KiwoomMarketStream(ReconnectingWebSocket, MarketStream):
             logger.debug("kiwoom stream: %s", text[:200])
 
     def _deliver(self, tick, target: dict, label: str) -> None:
+        if self._usage is not None:
+            self._usage.stream_message(StreamChannel.ORDER_BOOK if isinstance(tick, OrderBookTick) else StreamChannel.TRADES)
         code = tick.symbol
         with self._lock:
             symbol = self._requested.get(code, code)

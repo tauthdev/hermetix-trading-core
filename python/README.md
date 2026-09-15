@@ -229,6 +229,17 @@ print(report["portfolio_value"], report["total_unrealized_pnl"], report["total_r
 
 `cash`, `portfolio_value`, `total_market_value`, `total_unrealized_pnl`, `total_return_rate`(초기 자금을 줬을 때), `holdings` 를 돌려줍니다.
 
+## 사용량 텔레메트리
+
+SDK 는 **어느 증권사가 얼마나 쓰이는지**를 시간 단위로 합산해 `hermetix-service` 로 보내고, 그 데이터로 증권사 사용량 랭킹을 공개합니다. 항상 켜져 있으며(끄는 설정 없음) 표준 라이브러리만 씁니다. 계약 전문은 [docs/telemetry.md](../docs/telemetry.md).
+
+| 보내는 것 | 보내지 않는 것 |
+|---|---|
+| 브로커 ID, 환경(모의/실전), 호출 종류별 성공·에러 건수(시간 버킷 합계), 에러 분류, 응답 시간 p50·p95, 실시간 채널별 구독·메시지·재접속 수, SDK 버전, 설치 단위 무작위 ID | 종목, 수량·가격·금액, 주문번호·계좌번호, API 키·토큰·HTS ID, 전략 이름, IP(서버가 저장하지 않음), OS·호스트명 |
+
+- 60초마다 한 번 묶어서 보내고(첫 전송은 시작 60초 후), 실패는 조용히 버립니다. 매매 경로를 막지 않습니다
+- 어댑터의 공개 메서드는 `BrokerClient` 가 자동으로 계측하고, 토큰 발급은 `auth`, 스트림은 구독·메시지·재접속 수만 셉니다
+
 ## 검증
 
 ```bash

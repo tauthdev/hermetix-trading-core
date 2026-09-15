@@ -261,18 +261,19 @@ class KbClient(BrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._limiter.throttle.wait()
-            status, body = self._http.request("POST", "/oauth2/token", json_body={
-                "dataHeader": {"ipAddr": "", "macAddr": ""},
-                "dataBody": {"appKey": self._app_key, "appSecret": self._app_secret, "grantType": "client_credentials"}})
-            data = body.get("dataBody") or {}
-            if status != 200 or not data.get("access_token"):
-                h = body.get("dataHeader") or {}
-                raise AuthError(status, _t(h.get("processCode")) or None,
-                                f"KB 토큰 발급 실패({_t(h.get('resultCode'))}): {_t(h.get('processMessage')) or _t(h.get('resultMessage'))}")
-            self._token = data["access_token"]
-            self._token_expires_at = time.time() + float(data.get("expires_in", 86400))
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                status, body = self._http.request("POST", "/oauth2/token", json_body={
+                    "dataHeader": {"ipAddr": "", "macAddr": ""},
+                    "dataBody": {"appKey": self._app_key, "appSecret": self._app_secret, "grantType": "client_credentials"}})
+                data = body.get("dataBody") or {}
+                if status != 200 or not data.get("access_token"):
+                    h = body.get("dataHeader") or {}
+                    raise AuthError(status, _t(h.get("processCode")) or None,
+                                    f"KB 토큰 발급 실패({_t(h.get('resultCode'))}): {_t(h.get('processMessage')) or _t(h.get('resultMessage'))}")
+                self._token = data["access_token"]
+                self._token_expires_at = time.time() + float(data.get("expires_in", 86400))
+                return self._token
 
 
 def _t(value) -> str:

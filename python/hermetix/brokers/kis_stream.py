@@ -30,6 +30,7 @@ from typing import Callable
 
 from ..broker import KST, MarketStream, OrderBookListener, OrderEventListener, TradeListener
 from ..models import OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick, symbol_code
+from ..models import StreamChannel
 from ..stream import ReconnectingWebSocket
 
 logger = logging.getLogger("hermetix")
@@ -211,8 +212,8 @@ def kis_encrypt(plain: str, key: str, iv: str) -> str:
 class KisMarketStream(ReconnectingWebSocket, MarketStream):
 
     def __init__(self, ws_url: str, custtype: str, approval_key: Callable[[], str],
-                 hts_id: str = "", live: bool = False):
-        super().__init__("kis")
+                 hts_id: str = "", live: bool = False, usage=None):
+        super().__init__("kis", usage=usage)
         self._ws_url = ws_url
         self._custtype = custtype
         self._approval_key = approval_key
@@ -259,6 +260,8 @@ class KisMarketStream(ReconnectingWebSocket, MarketStream):
 
     def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None:
         new_codes = self._register(symbols, listener, self._trade_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.TRADES, len(new_codes))
         if new_codes and self.is_socket_open:
             key = self._approval_key()
             for code in new_codes:
@@ -266,6 +269,8 @@ class KisMarketStream(ReconnectingWebSocket, MarketStream):
 
     def subscribe_order_book(self, symbols: list[str], listener: OrderBookListener) -> None:
         new_codes = self._register(symbols, listener, self._book_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_BOOK, len(new_codes))
         if new_codes and self.is_socket_open:
             key = self._approval_key()
             for code in new_codes:
@@ -277,6 +282,8 @@ class KisMarketStream(ReconnectingWebSocket, MarketStream):
         with self._lock:
             first = not self._order_listeners
             self._order_listeners.append(listener)
+        if first and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_EVENTS)
         if first and self.is_socket_open:
             self.send(self._subscribe_message(self._approval_key(), self._tr_order_events, self._hts_id))
 
@@ -335,6 +342,8 @@ class KisMarketStream(ReconnectingWebSocket, MarketStream):
             with self._lock:
                 listeners = list(self._order_listeners)
             for event in parse_kis_order_events(plain):
+                if self._usage is not None:
+                    self._usage.stream_message(StreamChannel.ORDER_EVENTS)
                 for listener in listeners:
                     try:
                         listener(event)
@@ -344,6 +353,8 @@ class KisMarketStream(ReconnectingWebSocket, MarketStream):
             logger.debug("kis stream: unknown tr %s", tr_id)
 
     def _deliver(self, tick, target: dict, label: str) -> None:
+        if self._usage is not None:
+            self._usage.stream_message(StreamChannel.ORDER_BOOK if isinstance(tick, OrderBookTick) else StreamChannel.TRADES)
         code = tick.symbol
         with self._lock:
             symbol = self._requested.get(code, code)

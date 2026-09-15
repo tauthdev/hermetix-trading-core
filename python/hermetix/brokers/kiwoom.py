@@ -272,7 +272,7 @@ class KiwoomClient(StreamingBrokerClient):
 
     def open_stream(self) -> MarketStream:
         """웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 - 만료 시 재접속 때 _get_token 이 갱신한다"""
-        return KiwoomMarketStream(self._ws_url, self._get_token)
+        return KiwoomMarketStream(self._ws_url, self._get_token, usage=self._usage)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:
@@ -280,19 +280,20 @@ class KiwoomClient(StreamingBrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._limiter.throttle.wait()
-            status, body = self._http.request(
-                "POST", "/oauth2/token",
-                json_body={"grant_type": "client_credentials",
-                           "appkey": self._appkey, "secretkey": self._secretkey})
-            if status != 200 or body.get("return_code") != 0 or not body.get("token"):
-                raise AuthError(status, str(body.get("return_code")),
-                                f"키움 토큰 발급 실패: {body.get('return_msg', '')}")
-            self._token = body["token"]
-            # expires_dt: yyyyMMddHHmmss (KST)
-            try:
-                expires = datetime.strptime(body["expires_dt"], "%Y%m%d%H%M%S").replace(tzinfo=KST)
-                self._token_expires_at = expires.timestamp()
-            except (KeyError, ValueError):
-                self._token_expires_at = time.time() + 86400
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                status, body = self._http.request(
+                    "POST", "/oauth2/token",
+                    json_body={"grant_type": "client_credentials",
+                               "appkey": self._appkey, "secretkey": self._secretkey})
+                if status != 200 or body.get("return_code") != 0 or not body.get("token"):
+                    raise AuthError(status, str(body.get("return_code")),
+                                    f"키움 토큰 발급 실패: {body.get('return_msg', '')}")
+                self._token = body["token"]
+                # expires_dt: yyyyMMddHHmmss (KST)
+                try:
+                    expires = datetime.strptime(body["expires_dt"], "%Y%m%d%H%M%S").replace(tzinfo=KST)
+                    self._token_expires_at = expires.timestamp()
+                except (KeyError, ValueError):
+                    self._token_expires_at = time.time() + 86400
+                return self._token

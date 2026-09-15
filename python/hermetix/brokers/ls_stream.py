@@ -26,6 +26,7 @@ from typing import Callable
 
 from ..broker import KST, MarketStream, OrderBookListener, OrderEventListener, TradeListener
 from ..models import OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick, symbol_code
+from ..models import StreamChannel
 from ..stream import ReconnectingWebSocket
 
 logger = logging.getLogger("hermetix")
@@ -199,8 +200,8 @@ def parse_ls_order_events(node: dict, today: date | None = None) -> list[OrderEv
 
 class LsMarketStream(ReconnectingWebSocket, MarketStream):
 
-    def __init__(self, ws_url: str, token: Callable[[], str]):
-        super().__init__("ls", idle_timeout_seconds=0)
+    def __init__(self, ws_url: str, token: Callable[[], str], usage=None):
+        super().__init__("ls", idle_timeout_seconds=0, usage=usage)
         self._ws_url = ws_url
         self._token = token
         self._lock = threading.Lock()
@@ -246,6 +247,8 @@ class LsMarketStream(ReconnectingWebSocket, MarketStream):
 
     def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None:
         new_codes = self._register(symbols, listener, self._trade_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.TRADES, len(new_codes))
         if new_codes and self.is_socket_open:
             t = self._token()
             for code in new_codes:
@@ -254,6 +257,8 @@ class LsMarketStream(ReconnectingWebSocket, MarketStream):
 
     def subscribe_order_book(self, symbols: list[str], listener: OrderBookListener) -> None:
         new_codes = self._register(symbols, listener, self._book_listeners)
+        if new_codes and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_BOOK, len(new_codes))
         if new_codes and self.is_socket_open:
             t = self._token()
             for code in new_codes:
@@ -264,6 +269,8 @@ class LsMarketStream(ReconnectingWebSocket, MarketStream):
         with self._lock:
             first = not self._order_listeners
             self._order_listeners.append(listener)
+        if first and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_EVENTS)
         if first and self.is_socket_open:
             t = self._token()
             for tr in ORDER_TRS:
@@ -330,6 +337,8 @@ class LsMarketStream(ReconnectingWebSocket, MarketStream):
             with self._lock:
                 listeners = list(self._order_listeners)
             for event in parse_ls_order_events(node):
+                if self._usage is not None:
+                    self._usage.stream_message(StreamChannel.ORDER_EVENTS)
                 for listener in listeners:
                     try:
                         listener(event)
@@ -339,6 +348,8 @@ class LsMarketStream(ReconnectingWebSocket, MarketStream):
             logger.debug("ls stream: unknown tr %s", tr_cd)
 
     def _deliver(self, tick, target: dict, label: str) -> None:
+        if self._usage is not None:
+            self._usage.stream_message(StreamChannel.ORDER_BOOK if isinstance(tick, OrderBookTick) else StreamChannel.TRADES)
         code = tick.symbol
         with self._lock:
             symbol = self._requested.get(code, code)

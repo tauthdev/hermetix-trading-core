@@ -255,7 +255,7 @@ class LsClient(StreamingBrokerClient):
     # ------------------------------------------------------------------ stream
 
     def open_stream(self) -> MarketStream:
-        return LsMarketStream(self._ws_url, self._get_token)
+        return LsMarketStream(self._ws_url, self._get_token, usage=self._usage)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 600:
@@ -263,15 +263,16 @@ class LsClient(StreamingBrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 600:
                 return self._token
-            self._limiter.throttle.wait()
-            status, body = self._http.request("POST", "/oauth2/token", form_body={
-                "grant_type": "client_credentials", "appkey": self._app_key, "appsecretkey": self._app_secret, "scope": "oob"})
-            if status != 200 or not body.get("access_token"):
-                code = body.get("error_code") or body.get("rsp_cd")
-                raise AuthError(status, code, f"LS 토큰 발급 실패({code}): {body.get('error_description') or body.get('rsp_msg') or ''}")
-            self._token = body["access_token"]
-            self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                status, body = self._http.request("POST", "/oauth2/token", form_body={
+                    "grant_type": "client_credentials", "appkey": self._app_key, "appsecretkey": self._app_secret, "scope": "oob"})
+                if status != 200 or not body.get("access_token"):
+                    code = body.get("error_code") or body.get("rsp_cd")
+                    raise AuthError(status, code, f"LS 토큰 발급 실패({code}): {body.get('error_description') or body.get('rsp_msg') or ''}")
+                self._token = body["access_token"]
+                self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
+                return self._token
 
 
 def _side_of(row: dict) -> OrderSide:

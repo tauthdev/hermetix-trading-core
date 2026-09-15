@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import threading
@@ -26,6 +27,35 @@ from .models import (
 
 KST = ZoneInfo("Asia/Seoul")
 
+# 사용량 텔레메트리(docs/telemetry.md) - 공개 메서드 -> op 이름. 어댑터 서브클래스가 정의될 때 자동으로 감싼다
+_MEASURED_OPS = {
+    "get_quotes": "quotes", "get_candles": "candles", "get_calendar": "calendar", "get_account": "account",
+    "get_holdings": "holdings", "get_buying_power": "buying_power", "create_order": "create_order",
+    "get_orders": "get_orders", "get_order": "get_order", "cancel_order": "cancel_order", "get_fills": "fills",
+}
+
+
+def _measured(fn, op: str):
+    from .telemetry import telemetry
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        start = time.perf_counter()
+        failure = None
+        try:
+            return fn(self, *args, **kwargs)
+        except BaseException as e:
+            failure = e
+            raise
+        finally:
+            broker = getattr(getattr(self, "capabilities", None), "broker_id", None)
+            if broker:
+                telemetry.record(broker, getattr(self, "environment", TradingEnvironment.PAPER), op,
+                                 time.perf_counter() - start, failure)
+
+    wrapper._hermetix_measured = True
+    return wrapper
+
 
 class BrokerClient(ABC):
     """증권사(브로커) 추상화. 구현 규약:
@@ -38,6 +68,25 @@ class BrokerClient(ABC):
     capabilities: BrokerCapabilities
     # 이 인스턴스가 연결된 거래 환경. 엔진은 LIVE 면 명시 동의(live_trading_enabled)를 요구한다
     environment: TradingEnvironment = TradingEnvironment.PAPER
+
+    def __init_subclass__(cls, **kwargs):
+        """서브클래스가 정의한 공개 메서드를 사용량 텔레메트리로 감싼다 (한 번만, docs/telemetry.md)"""
+        super().__init_subclass__(**kwargs)
+        for method, op in _MEASURED_OPS.items():
+            fn = cls.__dict__.get(method)
+            if fn is None or not callable(fn) or getattr(fn, "_hermetix_measured", False):
+                continue
+            setattr(cls, method, _measured(fn, op))
+
+    @property
+    def _usage(self):
+        """이 어댑터의 텔레메트리 핸들 (브로커·환경 고정) - 토큰 발급(auth)·스트림 계측에 쓴다"""
+        handle = self.__dict__.get("_usage_handle")
+        if handle is None:
+            from .telemetry import BrokerUsage
+            handle = BrokerUsage(getattr(getattr(self, "capabilities", None), "broker_id", "unknown"), self.environment)
+            self.__dict__["_usage_handle"] = handle
+        return handle
 
     @abstractmethod
     def get_quotes(self, symbols: list[str]) -> list[Quote]: ...

@@ -30,6 +30,7 @@ from typing import Callable
 
 from ..broker import MarketStream, OrderBookListener, OrderEventListener, TradeListener
 from ..models import OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick, parse_symbol
+from ..models import StreamChannel
 from ..stream import ReconnectingWebSocket
 
 logger = logging.getLogger("hermetix")
@@ -158,8 +159,8 @@ def parse_toss_order_event(data: dict, previous_filled: Decimal | None) -> Order
 class TossMarketStream(ReconnectingWebSocket, MarketStream):
 
     def __init__(self, ws_url: str, token: Callable[[], str], account_seq: Callable[[], str],
-                 heartbeat_seconds: float = 60.0, declare_delay_seconds: float = 0.2):
-        super().__init__("toss", idle_timeout_seconds=0, heartbeat_seconds=heartbeat_seconds)
+                 heartbeat_seconds: float = 60.0, declare_delay_seconds: float = 0.2, usage=None):
+        super().__init__("toss", idle_timeout_seconds=0, heartbeat_seconds=heartbeat_seconds, usage=usage)
         self._ws_url = ws_url
         self._token = token
         self._account_seq = account_seq
@@ -199,31 +200,39 @@ class TossMarketStream(ReconnectingWebSocket, MarketStream):
 
     # ------------------------------------------------------------------ subscribe
 
-    def _register(self, symbols: list[str], listener, target: dict) -> bool:
-        """True 면 새 topic 이 생겨 선언을 다시 보내야 한다"""
-        changed = False
+    def _register(self, symbols: list[str], listener, target: dict) -> int:
+        """새로 생긴 topic 수 (0 이 아니면 선언을 다시 보내야 한다)"""
+        changed = 0
         with self._lock:
             for symbol in symbols:
                 key = topic_key(symbol)
                 self._requested.setdefault(key, symbol)
                 if key not in target:
                     target[key] = []
-                    changed = True
+                    changed += 1
                 target[key].append(listener)
         return changed
 
     def subscribe_trades(self, symbols: list[str], listener: TradeListener) -> None:
-        if self._register(symbols, listener, self._trade_listeners):
+        new = self._register(symbols, listener, self._trade_listeners)
+        if new:
+            if self._usage is not None:
+                self._usage.stream_subscribed(StreamChannel.TRADES, new)
             self._schedule_declare()
 
     def subscribe_order_book(self, symbols: list[str], listener: OrderBookListener) -> None:
-        if self._register(symbols, listener, self._book_listeners):
+        new = self._register(symbols, listener, self._book_listeners)
+        if new:
+            if self._usage is not None:
+                self._usage.stream_subscribed(StreamChannel.ORDER_BOOK, new)
             self._schedule_declare()
 
     def subscribe_order_events(self, listener: OrderEventListener) -> None:
         with self._lock:
             first = not self._order_listeners
             self._order_listeners.append(listener)
+        if first and self._usage is not None:
+            self._usage.stream_subscribed(StreamChannel.ORDER_EVENTS)
         if first:
             self._schedule_declare()
 
@@ -327,6 +336,8 @@ class TossMarketStream(ReconnectingWebSocket, MarketStream):
             event = parse_toss_order_event(data, self._filled_so_far.get(order_id))
             if event is None:
                 return
+            if self._usage is not None:
+                self._usage.stream_message(StreamChannel.ORDER_EVENTS)
             filled = _dec((data.get("order") or {}).get("execution") or {}, "filledQuantity")
             if filled is not None:
                 self._filled_so_far[order_id] = filled
@@ -341,6 +352,8 @@ class TossMarketStream(ReconnectingWebSocket, MarketStream):
                     logger.exception("toss stream: 주문 이벤트 리스너 오류 / %s", event.order_id)
 
     def _deliver(self, tick, key: str, target: dict, label: str) -> None:
+        if self._usage is not None:
+            self._usage.stream_message(StreamChannel.ORDER_BOOK if isinstance(tick, OrderBookTick) else StreamChannel.TRADES)
         with self._lock:
             symbol = self._requested.get(key)
             listeners = list(target.get(key, ()))

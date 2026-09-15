@@ -253,7 +253,7 @@ class TossClient(StreamingBrokerClient):
     # ------------------------------------------------------------------ stream
 
     def open_stream(self) -> MarketStream:
-        return TossMarketStream(self._ws_url, self._get_token, self._account)
+        return TossMarketStream(self._ws_url, self._get_token, self._account, usage=self._usage)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 60:
@@ -261,11 +261,12 @@ class TossClient(StreamingBrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 60:
                 return self._token
-            self._limiter.throttle.wait()
-            status, body = self._http.request("POST", "/oauth2/token", form_body={
-                "grant_type": "client_credentials", "client_id": self._client_id, "client_secret": self._client_secret})
-            if status != 200 or not body.get("access_token"):
-                raise AuthError(status, body.get("error"), f"토스 토큰 발급 실패({body.get('error')}): {body.get('error_description') or ''}")
-            self._token = body["access_token"]
-            self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                status, body = self._http.request("POST", "/oauth2/token", form_body={
+                    "grant_type": "client_credentials", "client_id": self._client_id, "client_secret": self._client_secret})
+                if status != 200 or not body.get("access_token"):
+                    raise AuthError(status, body.get("error"), f"토스 토큰 발급 실패({body.get('error')}): {body.get('error_description') or ''}")
+                self._token = body["access_token"]
+                self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
+                return self._token

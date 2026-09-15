@@ -320,7 +320,7 @@ class KisClient(StreamingBrokerClient):
 
     def open_stream(self) -> MarketStream:
         return KisMarketStream(self._ws_url, self._custtype, self.approval_key, hts_id=self._hts_id,
-                               live=self.environment == TradingEnvironment.LIVE)
+                               live=self.environment == TradingEnvironment.LIVE, usage=self._usage)
 
     def apply_order_event(self, event: OrderEvent) -> None:
         """주문 통보를 메모리 추적에 반영한다 - 모의 서버가 주문 조회를 제공하지 않아 보유 수량 변화로 근사하던 체결 판정을
@@ -349,14 +349,15 @@ class KisClient(StreamingBrokerClient):
     def approval_key(self) -> str:
         """웹소켓 접속키 (POST /oauth2/Approval). 토큰과 달리 캐시하지 않는다 - 접속마다 새로 받아도 무방하다.
         필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의."""
-        self._limiter.throttle.wait()
-        status, body = self._http.request(
-            "POST", "/oauth2/Approval",
-            json_body={"grant_type": "client_credentials", "appkey": self._appkey, "secretkey": self._appsecret})
-        if status != 200 or not body.get("approval_key"):
-            raise AuthError(status, body.get("error_code"),
-                            f"KIS 웹소켓 접속키 발급 실패: {body.get('error_description', '')}")
-        return body["approval_key"]
+        with self._usage.measure("auth"):
+            self._limiter.throttle.wait()
+            status, body = self._http.request(
+                "POST", "/oauth2/Approval",
+                json_body={"grant_type": "client_credentials", "appkey": self._appkey, "secretkey": self._appsecret})
+            if status != 200 or not body.get("approval_key"):
+                raise AuthError(status, body.get("error_code"),
+                                f"KIS 웹소켓 접속키 발급 실패: {body.get('error_description', '')}")
+            return body["approval_key"]
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:
@@ -364,14 +365,15 @@ class KisClient(StreamingBrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._limiter.throttle.wait()
-            status, body = self._http.request(
-                "POST", "/oauth2/tokenP",
-                json_body={"grant_type": "client_credentials",
-                           "appkey": self._appkey, "appsecret": self._appsecret})
-            if status != 200 or "access_token" not in body:
-                raise AuthError(status, body.get("error_code"),
-                                f"KIS 토큰 발급 실패: {body.get('error_description', '')} (발급은 1분당 1회 제한)")
-            self._token = body["access_token"]
-            self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                status, body = self._http.request(
+                    "POST", "/oauth2/tokenP",
+                    json_body={"grant_type": "client_credentials",
+                               "appkey": self._appkey, "appsecret": self._appsecret})
+                if status != 200 or "access_token" not in body:
+                    raise AuthError(status, body.get("error_code"),
+                                    f"KIS 토큰 발급 실패: {body.get('error_description', '')} (발급은 1분당 1회 제한)")
+                self._token = body["access_token"]
+                self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
+                return self._token

@@ -322,7 +322,7 @@ class NhClient(StreamingBrokerClient):
     # ------------------------------------------------------------------ stream
 
     def open_stream(self) -> MarketStream:
-        return NhMarketStream(self._ws_url, self._get_token, market_cd=self._market_cd, account_no=self._account_no)
+        return NhMarketStream(self._ws_url, self._get_token, market_cd=self._market_cd, account_no=self._account_no, usage=self._usage)
 
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_expires_at - 300:
@@ -330,17 +330,18 @@ class NhClient(StreamingBrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 300:
                 return self._token
-            self._limiter.throttle.wait()
-            # SDK 규약: 파라미터는 쿼리스트링, 본문 없음, content-type 은 form-urlencoded
-            status, body = self._auth_http.request(
-                "POST", "/oauth2/token", headers={"Content-Type": "application/x-www-form-urlencoded"},
-                query={"appkey": self._app_key, "appsecretkey": self._app_secret, "grant_type": "client_credentials", "scope": "oob"})
-            if status != 200 or not body.get("access_token"):
-                code = body.get("code") or body.get("rsp_cd")
-                raise AuthError(status, code, f"NH 토큰 발급 실패({code}): {body.get('message') or body.get('rsp_msg') or ''}")
-            self._token = body["access_token"]
-            self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
-            return self._token
+            with self._usage.measure("auth"):
+                self._limiter.throttle.wait()
+                # SDK 규약: 파라미터는 쿼리스트링, 본문 없음, content-type 은 form-urlencoded
+                status, body = self._auth_http.request(
+                    "POST", "/oauth2/token", headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    query={"appkey": self._app_key, "appsecretkey": self._app_secret, "grant_type": "client_credentials", "scope": "oob"})
+                if status != 200 or not body.get("access_token"):
+                    code = body.get("code") or body.get("rsp_cd")
+                    raise AuthError(status, code, f"NH 토큰 발급 실패({code}): {body.get('message') or body.get('rsp_msg') or ''}")
+                self._token = body["access_token"]
+                self._token_expires_at = time.time() + float(body.get("expires_in", 86400))
+                return self._token
 
 
 def _side_of(row: dict) -> OrderSide:

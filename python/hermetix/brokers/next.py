@@ -326,17 +326,18 @@ class NextClient(BrokerClient):
         with self._token_lock:
             if self._token and time.time() < self._token_expires_at - 60:
                 return self._token
-            status, body = self._http.request(
-                "POST", "/v1/oauth/token",
-                headers={REQUEST_ID_HEADER: new_request_id()},
-                form_body={"grant_type": "client_credentials",
-                           "client_id": self._client_id, "client_secret": self._client_secret},
-            )
-            if status != 200 or "access_token" not in body:
-                raise self._token_error(status, body)
-            self._token = body["access_token"]
-            self._token_expires_at = time.time() + float(body.get("expires_in", 43200))
-            return self._token
+            with self._usage.measure("auth"):
+                status, body = self._http.request(
+                    "POST", "/v1/oauth/token",
+                    headers={REQUEST_ID_HEADER: new_request_id()},
+                    form_body={"grant_type": "client_credentials",
+                               "client_id": self._client_id, "client_secret": self._client_secret},
+                )
+                if status != 200 or "access_token" not in body:
+                    raise self._token_error(status, body)
+                self._token = body["access_token"]
+                self._token_expires_at = time.time() + float(body.get("expires_in", 43200))
+                return self._token
 
     @staticmethod
     def _token_error(status: int, body: dict) -> AuthError:
