@@ -6,6 +6,7 @@
  * - 한 계좌로 KRX·미국을 다룬다 → 보유·주문 심볼은 KRX:005930 / US:AAPL 로 접두를 붙여 돌려준다
  * - 시세에 등락·거래량 없음, 예수금 없음(KRW 매수가능금액 대체), 체결 엔드포인트 없음(종료 주문 execution 집계), 취소는 새 orderId 발급, 캘린더 KRX 합성
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { randomUUID } from "node:crypto";
 import { Decimal } from "decimal.js";
 import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
@@ -31,6 +32,8 @@ export class TossClient implements StreamingBrokerClient {
   /** 실시간 — AsyncAPI 1.2.2. 계정당 연결 2개, 구독 100개, 선언 5회/초, 180초 무송신 시 끊김(60초 PING), 토큰은 핸드셰이크에서만 검사 (실측 전) */
   static readonly WS_URL = "wss://openapi-ws.tossinvest.com/ws/v1";
 
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "toss", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1m", "1d"]),
@@ -56,11 +59,12 @@ export class TossClient implements StreamingBrokerClient {
   ) {
     this.accountSeq = accountSeq;
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * 2 ** (attempt - 1));
+      this.usage = instrumentBroker(this);
   }
 
   /** 웹소켓은 REST 와 같은 토큰을 핸드셰이크 헤더에 싣고, 주문 이벤트 구독은 accountSeq 로 계좌를 고른다 */
   openStream(): MarketStream {
-    return new TossMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken(), accountSeq: () => this.account() });
+    return new TossMarketStream({ usage: this.usage, wsUrl: this.wsUrl, token: () => this.getToken(), accountSeq: () => this.account() });
   }
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
@@ -204,6 +208,7 @@ export class TossClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 60_000) return this.token;
     await this.limiter.throttle.wait();
     const form = new URLSearchParams({ grant_type: "client_credentials", client_id: this.clientId, client_secret: this.clientSecret });
@@ -212,5 +217,6 @@ export class TossClient implements StreamingBrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }

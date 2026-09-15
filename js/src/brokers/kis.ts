@@ -6,6 +6,7 @@
  * - 모의 서버는 미체결/체결 조회 미제공 -> 메모리 주문 추적, 체결은 보유수량 변화 근사
  * - 취소는 지점번호 없이 ODNO 만으로 동작 / 캔들은 일봉만 / 지정가는 호가단위 보정
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import {
   D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstToday, kstYyyymmdd,
@@ -24,6 +25,8 @@ import { isOpenStatus } from "../models.js";
 interface Tracked { order: Order; baselineQty: Decimal; day: string; }
 
 export class KisClient implements StreamingBrokerClient {
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "kis",
     market: "KRX",
@@ -72,6 +75,7 @@ export class KisClient implements StreamingBrokerClient {
     this.baseUrl = baseUrl || (live ? KisClient.LIVE_URL : KisClient.PAPER_URL);
     this.wsUrl = wsUrl || (live ? KisClient.LIVE_WS_URL : KisClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs || (live ? 100 : 600), 3, (attempt) => 1000 * attempt);
+      this.usage = instrumentBroker(this);
   }
 
   /** 계좌 TR ID — 모의 V, 실전 T 프리픽스 (예: tr("TTC0802U") → VTTC0802U / TTTC0802U) */
@@ -220,7 +224,7 @@ export class KisClient implements StreamingBrokerClient {
   // ---------------------------------------------------------------- stream
 
   openStream(): MarketStream {
-    return new KisMarketStream({
+    return new KisMarketStream({ usage: this.usage,
       wsUrl: this.wsUrl, custtype: "P", approvalKey: () => this.approvalKey(),
       htsId: this.htsId, live: this.environment === "LIVE",
     });
@@ -267,6 +271,7 @@ export class KisClient implements StreamingBrokerClient {
    * 필드명이 REST 토큰(appsecret)과 달리 secretkey 인 점에 주의.
    */
   async approvalKey(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/Approval`, {
       method: "POST",
@@ -277,6 +282,7 @@ export class KisClient implements StreamingBrokerClient {
       throw new AuthError(status, (body.error_code as string) ?? null, `KIS 웹소켓 접속키 발급 실패: ${body.error_description ?? ""}`);
     }
     return body.approval_key;
+    });
   }
 
   // -------------------------------------------------------------- internal
@@ -352,6 +358,7 @@ export class KisClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
     await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/tokenP`, {
@@ -366,6 +373,7 @@ export class KisClient implements StreamingBrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }
 

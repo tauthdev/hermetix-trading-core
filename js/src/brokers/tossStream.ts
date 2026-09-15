@@ -19,9 +19,12 @@ import { Decimal } from "decimal.js";
 import type { MarketStream, OrderBookListener, OrderEventListener, TradeListener } from "../broker.js";
 import type { OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick } from "../models.js";
 import { parseSymbol } from "../models.js";
+import type { BrokerUsage } from "../telemetry.js";
 import { ReconnectingWebSocket } from "../stream.js";
 
 export interface TossStreamOptions {
+  /** 사용량 텔레메트리 핸들 (어댑터가 넘긴다) */
+  usage?: BrokerUsage;
   wsUrl: string;
   /** 접속마다 호출 — REST 접근토큰 (재발급하면 이전 토큰이 무효가 되므로 REST 캐시를 그대로 쓴다) */
   token: () => Promise<string>;
@@ -69,7 +72,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
   private readonly declareDelayMs: number;
 
   constructor(private readonly options: TossStreamOptions) {
-    super("toss", 30_000, 0, options.heartbeatMs ?? 60_000);
+    super("toss", 30_000, 0, options.heartbeatMs ?? 60_000, options.usage);
     this.declareDelayMs = options.declareDelayMs ?? 200;
   }
 
@@ -99,7 +102,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
   subscribeOrderEvents(listener: OrderEventListener): void {
     const first = this.orderListeners.length === 0;
     this.orderListeners.push(listener);
-    if (first) this.scheduleDeclare();
+    if (first) { this.options.usage?.streamSubscribed("ORDER_EVENTS"); this.scheduleDeclare(); }
   }
 
   /** true 면 새 topic 이 생겨 선언을 다시 보내야 한다 */
@@ -108,6 +111,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
     for (const symbol of symbols) {
       const key = tossTopicKey(symbol);
       if (!this.requestedSymbols.has(key)) this.requestedSymbols.set(key, symbol);
+      if (!target.has(key)) this.options.usage?.streamSubscribed((target as unknown) === (this.tradeListeners as unknown) ? "TRADES" : "ORDER_BOOK");
       let list = target.get(key);
       if (!list) { list = []; target.set(key, list); changed = true; }
       list.push(listener);
@@ -186,6 +190,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
         if (!tick) return;
         const requested = this.requestedSymbols.get(key);
         const out = requested ? { ...tick, symbol: requested } : tick;
+        this.options.usage?.streamMessage("TRADES");
         for (const l of this.tradeListeners.get(key) ?? []) { try { l(out); } catch (e) { console.error(`ERROR hermetix toss stream: 리스너 오류 / ${out.symbol}: ${e}`); } }
         break;
       }
@@ -194,6 +199,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
         if (!book) return;
         const requested = this.requestedSymbols.get(key);
         const out = requested ? { ...book, symbol: requested } : book;
+        this.options.usage?.streamMessage("ORDER_BOOK");
         for (const l of this.bookListeners.get(key) ?? []) { try { l(out); } catch (e) { console.error(`ERROR hermetix toss stream: 호가 리스너 오류 / ${out.symbol}: ${e}`); } }
         break;
       }
@@ -205,6 +211,7 @@ export class TossMarketStream extends ReconnectingWebSocket implements MarketStr
         const filled = num(((order.execution ?? {}) as Json).filledQuantity);
         if (filled) this.filledSoFar.set(orderId, filled);
         if (event.type === "CANCELED" || event.type === "REJECTED") this.filledSoFar.delete(orderId);
+        this.options.usage?.streamMessage("ORDER_EVENTS");
         for (const l of this.orderListeners) { try { l(event); } catch (e) { console.error(`ERROR hermetix toss stream: 주문 이벤트 리스너 오류 / ${event.orderId}: ${e}`); } }
         break;
       }

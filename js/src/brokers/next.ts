@@ -11,6 +11,7 @@
  * - 시각은 ISO 8601 · KST (오프셋 생략 시 KST). 등락률·손익률은 % 단위 → 공통 모델 규약(비율)로 /100
  * - 토큰 발급 400/401 만 OAuth 표준 {error, error_description} 형식
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { randomUUID } from "node:crypto";
 import { Decimal } from "decimal.js";
 import { BrokerClient, D, DorNull, RateLimiter, httpJson } from "../broker.js";
@@ -60,6 +61,8 @@ const pct = (value: unknown): Decimal | null => {
 };
 
 export class NextClient implements BrokerClient {
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "next",
     market: "US",
@@ -89,6 +92,7 @@ export class NextClient implements BrokerClient {
     if (clientId.startsWith("pk_") && !clientId.startsWith(expected)) {
       throw new Error(`environment=${environment} 인데 clientId 가 '${expected}' 로 시작하지 않습니다 (모의=pk_test_, 실전=pk_live_). 키와 환경 설정을 맞추세요.`);
     }
+      this.usage = instrumentBroker(this);
   }
 
   // ---------------------------------------------------------------- market
@@ -296,6 +300,7 @@ export class NextClient implements BrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 60_000) return this.token;
     const form = new URLSearchParams({
       grant_type: "client_credentials",
@@ -314,6 +319,7 @@ export class NextClient implements BrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 43200) * 1000;
     return this.token;
+    });
   }
 
   private tokenError(status: number, body: Record<string, unknown>): AuthError {

@@ -244,6 +244,16 @@ console.log(report.portfolioValue.toString(), report.totalUnrealizedPnl.toString
 
 `PnlReport` 는 총평가·예수금·보유 평가금액·미실현손익·(선택) 총수익률과 보유 목록을 담습니다.
 
+## 사용량 텔레메트리
+
+SDK 는 **어느 증권사가 얼마나 쓰이는지**를 시간 단위로 합산해 60초마다 `hermetix-service` 로 보냅니다. 이 데이터로 증권사 사용량 랭킹을 공개합니다. 끄는 설정은 없고(항상 켜짐), 대신 보내는 내용을 그대로 공개합니다 — 계약은 [docs/telemetry.md](../docs/telemetry.md).
+
+| 보내는 것 | 보내지 않는 것 |
+|---|---|
+| 브로커 ID, 환경(모의/실전), 호출 종류별 성공·에러 건수(에러는 분류만), 응답 시간 p50·p95, 실시간 채널별 구독·메시지·재접속 수, SDK 언어·버전, 설치 단위 무작위 ID(`~/.hermetix/installation-id`) | 종목·수량·가격·금액, 주문번호·계좌번호, API 키·토큰·HTS ID, 전략 이름, IP(서버가 저장하지 않음), OS·호스트명 |
+
+전송은 매매 경로와 분리된 unref 타이머에서 일어나고, 실패는 조용히 버립니다(재시도·큐 없음). 새 의존성은 없습니다(`fetch`). 테스트에서는 `UsageTelemetry.transport` 를 교체하고 `UsageTelemetry.flushNow()`/`drain()` 으로 페이로드를 확인할 수 있습니다.
+
 ## 검증
 
 ```bash

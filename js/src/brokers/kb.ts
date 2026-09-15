@@ -5,6 +5,7 @@
  * - 성공 dataHeader.processFlag == "A"(HTTP 200 이어도 "B" 면 업무 오류). 숫자 zero-padded, 문자열 공백 패딩 → trim
  * 미확인: bdy_cmpr_ccd 부호 코드(4·5 하락 가정), 체결 조회 레코드 이름(Record1 가정), 표준코드(KR7005930003)→6자리 환산, 차트 시장구분(KOSPI 기본)
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import { BrokerClient, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd } from "../broker.js";
 import {
@@ -33,6 +34,8 @@ const sameNo = (a: unknown, b: unknown) => t(a).replace(/^0+/, "") === t(b).repl
 const sideOf = (row: Record<string, unknown>): OrderSide => t(row.trd_dl_ccd_nm).includes("매수") ? "BUY" : "SELL";
 
 export class KbClient implements BrokerClient {
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "kb", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
@@ -56,6 +59,7 @@ export class KbClient implements BrokerClient {
     readonly environment: TradingEnvironment = "LIVE",
   ) {
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * attempt);
+      this.usage = instrumentBroker(this);
   }
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
@@ -198,6 +202,7 @@ export class KbClient implements BrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
     await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/token`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataHeader: { ipAddr: "", macAddr: "" }, dataBody: { appKey: this.appKey, appSecret: this.appSecret, grantType: "client_credentials" } }) });
@@ -209,5 +214,6 @@ export class KbClient implements BrokerClient {
     this.token = data.access_token;
     this.tokenExpiresAt = Date.now() + Number(data.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }

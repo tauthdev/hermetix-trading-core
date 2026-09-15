@@ -11,6 +11,8 @@
  * - headers() 가 돌려주는 헤더를 업그레이드 요청에 싣는다 (Node 22 내장 WebSocket 의 undici `headers` 옵션 — 토스 Authorization: Bearer)
  * - 콜백은 이벤트 루프에서 실행된다. onMessage 의 예외는 로그만 남긴다
  */
+import type { BrokerUsage } from "./telemetry.js";
+
 const log = {
   info: (msg: string) => console.log(`INFO hermetix ${msg}`),
   warn: (msg: string) => console.warn(`WARN hermetix ${msg}`),
@@ -37,6 +39,8 @@ export abstract class ReconnectingWebSocket {
     private readonly maxBackoffMs = 30_000,
     private readonly idleTimeoutMs = 90_000,
     private readonly heartbeatMs = 0,
+    /** 사용량 텔레메트리 핸들 — 재접속 횟수를 센다 (docs/telemetry.md). 없으면 세지 않는다 */
+    protected readonly usage?: BrokerUsage,
   ) {}
 
   /** 매 (재)접속마다 호출된다 — 토큰·승인키 갱신은 여기서 */
@@ -156,6 +160,7 @@ export abstract class ReconnectingWebSocket {
   private scheduleReconnect(): void {
     if (this.closed || this.reconnectTimer) return;
     const n = this.attempt++;
+    if (n > 0) this.usage?.reconnected(); // 첫 접속 실패 재시도부터 셈 (정상 첫 접속은 재접속이 아님)
     const delay = Math.min(1000 * 2 ** Math.min(n, 10), this.maxBackoffMs);
     log.info(`${this.name} stream: reconnect in ${delay}ms`);
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; void this.doConnect(); }, delay);

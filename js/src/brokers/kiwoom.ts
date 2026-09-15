@@ -5,6 +5,7 @@
  * - 가격에 등락 부호 접두 (cur_prc "-239500") -> 절대값 / 금액은 zero-padded
  * - TR당 초당 1회 유량 제한 -> 1.1s 쓰로틀 + 백오프
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import {
   D, DorNull, RateLimiter, httpJson, krxCalendar, krxTickRound, kstYyyymmdd,
@@ -30,6 +31,8 @@ const signedOrNull = (v: unknown): Decimal | null => {
 };
 
 export class KiwoomClient implements StreamingBrokerClient {
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "kiwoom",
     market: "KRX",
@@ -68,6 +71,7 @@ export class KiwoomClient implements StreamingBrokerClient {
     this.baseUrl = baseUrl || (environment === "LIVE" ? KiwoomClient.LIVE_URL : KiwoomClient.PAPER_URL);
     this.wsUrl = wsUrl || (environment === "LIVE" ? KiwoomClient.LIVE_WS_URL : KiwoomClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1100 * attempt);
+      this.usage = instrumentBroker(this);
   }
 
   // ---------------------------------------------------------------- market
@@ -213,7 +217,7 @@ export class KiwoomClient implements StreamingBrokerClient {
 
   /** 웹소켓 로그인은 REST 접근토큰을 그대로 쓴다 — 만료 시 재접속 때 getToken 이 갱신한다 */
   openStream(): MarketStream {
-    return new KiwoomMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
+    return new KiwoomMarketStream({ usage: this.usage, wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   // -------------------------------------------------------------- internal
@@ -276,6 +280,7 @@ export class KiwoomClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
     await this.limiter.throttle.wait();
     const [status, body] = await httpJson(`${this.baseUrl}/oauth2/token`, {
@@ -293,5 +298,6 @@ export class KiwoomClient implements StreamingBrokerClient {
       ? new Date(`${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)}T${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}+09:00`).getTime()
       : Date.now() + 86400_000;
     return this.token;
+    });
   }
 }

@@ -10,6 +10,7 @@
  * - 앱 20 TPS 이지만 잔고·체결 2 TPS, 예수금 1 TPS → 500ms 쓰로틀 + IGW00201 지수 백오프
  * 미확인(실측 필요): 응답 숫자의 JSON 타입, IsuNo 의 A 접두 여부, 일봉 정렬(최신일 우선 추정), PrdyVrss 부호 여부
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
 import {
@@ -57,6 +58,8 @@ export class DbClient implements StreamingBrokerClient {
   static readonly PAPER_WS_URL = "wss://openapi.dbsec.co.kr:17070/websocket";
   static readonly LIVE_WS_URL = "wss://openapi.dbsec.co.kr:7070/websocket";
 
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "db", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
@@ -83,11 +86,12 @@ export class DbClient implements StreamingBrokerClient {
   ) {
     this.limiter = new RateLimiter(throttleMs, 4, (attempt) => 1000 * 2 ** (attempt - 1));
     this.wsUrl = wsUrl || (environment === "LIVE" ? DbClient.LIVE_WS_URL : DbClient.PAPER_WS_URL);
+      this.usage = instrumentBroker(this);
   }
 
   /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다 (문서 기반, 실측 전) */
   openStream(): MarketStream {
-    return new DbMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
+    return new DbMarketStream({ usage: this.usage, wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   // ---------------------------------------------------------------- market
@@ -263,6 +267,7 @@ export class DbClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 600_000) return this.token;
     await this.limiter.throttle.wait();
     const form = new URLSearchParams({ grant_type: "client_credentials", appkey: this.appKey, appsecretkey: this.appSecret, scope: "oob" }); // JSON/appsecret 은 IGW00133
@@ -276,5 +281,6 @@ export class DbClient implements StreamingBrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }

@@ -7,6 +7,7 @@
  * - TR 별 TPS(시세 3, 차트 1, 계좌 2, 예수금 1, 주문 10) → 전역 500ms + 차트 전용 1100ms 쓰로틀
  * 미확인: 잔고 expcode 의 A 접두, sign 코드(4·5 하락 가정), 응답 숫자 타입, 장 마감 코드(메시지 판단), medosu 표기
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound } from "../broker.js";
 import {
@@ -52,6 +53,8 @@ export class LsClient implements StreamingBrokerClient {
   static readonly PAPER_WS_URL = "wss://openapi.ls-sec.co.kr:29443/websocket";
   static readonly LIVE_WS_URL = "wss://openapi.ls-sec.co.kr:9443/websocket";
 
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "ls", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
@@ -80,11 +83,12 @@ export class LsClient implements StreamingBrokerClient {
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * attempt);
     this.chartLimiter = new RateLimiter(chartThrottleMs, 0); // 차트 TR 초당 1건
     this.wsUrl = wsUrl || (environment === "LIVE" ? LsClient.LIVE_WS_URL : LsClient.PAPER_WS_URL);
+      this.usage = instrumentBroker(this);
   }
 
   /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다. 종목마다 KOSPI·KOSDAQ TR 을 둘 다 등록한다 (문서 기반, 실측 전) */
   openStream(): MarketStream {
-    return new LsMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken() });
+    return new LsMarketStream({ usage: this.usage, wsUrl: this.wsUrl, token: () => this.getToken() });
   }
 
   async getQuotes(symbols: string[]): Promise<Quote[]> {
@@ -231,6 +235,7 @@ export class LsClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 600_000) return this.token;
     await this.limiter.throttle.wait();
     const form = new URLSearchParams({ grant_type: "client_credentials", appkey: this.appKey, appsecretkey: this.appSecret, scope: "oob" });
@@ -242,5 +247,6 @@ export class LsClient implements StreamingBrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }

@@ -23,6 +23,7 @@ import type { MarketStream, OrderBookListener, OrderEventListener, TradeListener
 import { DorNull, kstToday } from "../broker.js";
 import type { OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick } from "../models.js";
 import { symbolCode } from "../models.js";
+import type { BrokerUsage } from "../telemetry.js";
 import { ReconnectingWebSocket, kstDateTime } from "../stream.js";
 
 export const KIS_TR_TRADE = "H0STCNT0";
@@ -34,6 +35,8 @@ const MIN_BOOK_FIELDS = 45;
 const MIN_ORDER_FIELDS = 17;
 
 export interface KisStreamOptions {
+  /** 사용량 텔레메트리 핸들 (어댑터가 넘긴다) */
+  usage?: BrokerUsage;
   wsUrl: string;
   custtype: string;
   /** 접속마다 호출 — 새 approval_key */
@@ -54,7 +57,7 @@ export class KisMarketStream extends ReconnectingWebSocket implements MarketStre
   private readonly cipherKeys = new Map<string, { key: string; iv: string }>();
 
   constructor(private readonly options: KisStreamOptions) {
-    super("kis");
+    super("kis", 30_000, 90_000, 0, options.usage);
   }
 
   get isConnected(): boolean { return this.isSocketOpen; }
@@ -72,17 +75,20 @@ export class KisMarketStream extends ReconnectingWebSocket implements MarketStre
 
   subscribeTrades(symbols: string[], listener: TradeListener): void {
     const newCodes = this.register(symbols, listener, this.tradeListeners);
+    this.options.usage?.streamSubscribed("TRADES", newCodes.length);
     if (newCodes.length > 0 && this.isSocketOpen) this.sendSubscriptions(KIS_TR_TRADE, newCodes);
   }
 
   subscribeOrderBook(symbols: string[], listener: OrderBookListener): void {
     const newCodes = this.register(symbols, listener, this.bookListeners);
+    this.options.usage?.streamSubscribed("ORDER_BOOK", newCodes.length);
     if (newCodes.length > 0 && this.isSocketOpen) this.sendSubscriptions(KIS_TR_ORDER_BOOK, newCodes);
   }
 
   subscribeOrderEvents(listener: OrderEventListener): void {
     if (!this.options.htsId) throw new Error("KIS 주문 통보 구독에는 HTS ID 가 필요합니다 (KisClient htsId)");
     const first = this.orderListeners.length === 0;
+    if (first) this.options.usage?.streamSubscribed("ORDER_EVENTS");
     this.orderListeners.push(listener);
     if (first && this.isSocketOpen) this.sendSubscriptions(this.trOrderEvents, [this.options.htsId]);
   }
@@ -147,6 +153,7 @@ export class KisMarketStream extends ReconnectingWebSocket implements MarketStre
       case KIS_TR_ORDER_EVENTS_PAPER:
       case KIS_TR_ORDER_EVENTS_LIVE:
         for (const event of parseKisOrderEvents(plain)) {
+          this.options.usage?.streamMessage("ORDER_EVENTS");
           for (const l of this.orderListeners) {
             try { l(event); } catch (e) { console.error(`ERROR hermetix kis stream: 주문 통보 리스너 오류 / ${event.orderId}: ${e}`); }
           }
@@ -158,6 +165,7 @@ export class KisMarketStream extends ReconnectingWebSocket implements MarketStre
   }
 
   private deliver<T extends { symbol: string }>(tick: T, target: Map<string, ((t: T) => void)[]>, label: string): void {
+    this.options.usage?.streamMessage((target as unknown) === (this.tradeListeners as unknown) ? "TRADES" : "ORDER_BOOK");
     const code = tick.symbol;
     const symbol = this.requestedSymbols.get(code) ?? code;
     const normalized = symbol === code ? tick : { ...tick, symbol };

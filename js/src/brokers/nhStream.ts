@@ -18,6 +18,7 @@ import type { MarketStream, OrderBookListener, OrderEventListener, TradeListener
 import { kstToday } from "../broker.js";
 import type { OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick } from "../models.js";
 import { symbolCode } from "../models.js";
+import type { BrokerUsage } from "../telemetry.js";
 import { ReconnectingWebSocket, kstDateTime } from "../stream.js";
 
 /** 통보의 issuecd 는 12자리(선행 0)·A 접두일 수 있다 → 6자리 코드 (nh.ts 의 nhNormalizeCode 와 같은 규칙, 순환 import 회피용 복제) */
@@ -31,6 +32,8 @@ const FALLING_SIGNS = new Set(["4", "5", "8", "9"]);
 const BOOK_PREFIXES = ["", "P_", "S_", "S4_", "S5_", "S6_", "S7_", "S8_", "S9_", "S10_"];
 
 export interface NhStreamOptions {
+  /** 사용량 텔레메트리 핸들 (어댑터가 넘긴다) */
+  usage?: BrokerUsage;
   wsUrl: string;
   /** 접속·구독마다 호출 — REST 접근토큰 */
   token: () => Promise<string>;
@@ -71,7 +74,7 @@ export class NhMarketStream extends ReconnectingWebSocket implements MarketStrea
   readonly bookChannel: string;
 
   constructor(private readonly options: NhStreamOptions) {
-    super("nh", 30_000, 0);
+    super("nh", 30_000, 0, 0, options.usage);
     const ch = nhChannels(options.marketCd);
     this.tradeChannel = ch.trade;
     this.bookChannel = ch.book;
@@ -90,16 +93,19 @@ export class NhMarketStream extends ReconnectingWebSocket implements MarketStrea
 
   subscribeTrades(symbols: string[], listener: TradeListener): void {
     const newCodes = this.register(symbols, listener, this.tradeListeners);
+    this.options.usage?.streamSubscribed("TRADES", newCodes.length);
     if (newCodes.length > 0 && this.isSocketOpen) this.sendLater((t) => newCodes.map((c) => this.message(t, "1", this.tradeChannel, c)));
   }
 
   subscribeOrderBook(symbols: string[], listener: OrderBookListener): void {
     const newCodes = this.register(symbols, listener, this.bookListeners);
+    this.options.usage?.streamSubscribed("ORDER_BOOK", newCodes.length);
     if (newCodes.length > 0 && this.isSocketOpen) this.sendLater((t) => newCodes.map((c) => this.message(t, "1", this.bookChannel, c)));
   }
 
   subscribeOrderEvents(listener: OrderEventListener): void {
     const first = this.orderListeners.length === 0;
+    if (first) this.options.usage?.streamSubscribed("ORDER_EVENTS");
     this.orderListeners.push(listener);
     if (first && this.isSocketOpen) this.sendLater((t) => NH_ORDER_CHANNELS.map((ch) => this.message(t, "1", ch, "")));
   }
@@ -144,6 +150,7 @@ export class NhMarketStream extends ReconnectingWebSocket implements MarketStrea
         break;
       case "d2": case "d3":
         for (const event of parseNhOrderEvents(node, kstToday(), this.options.accountNo ?? "")) {
+          this.options.usage?.streamMessage("ORDER_EVENTS");
           for (const l of this.orderListeners) {
             try { l(event); } catch (e) { console.error(`ERROR hermetix nh stream: 주문 통보 리스너 오류 / ${event.orderId}: ${e}`); }
           }
@@ -155,6 +162,7 @@ export class NhMarketStream extends ReconnectingWebSocket implements MarketStrea
   }
 
   private deliver<T extends { symbol: string }>(tick: T, target: Map<string, ((t: T) => void)[]>, label: string): void {
+    this.options.usage?.streamMessage((target as unknown) === (this.tradeListeners as unknown) ? "TRADES" : "ORDER_BOOK");
     const code = tick.symbol;
     const symbol = this.requestedSymbols.get(code) ?? code;
     const normalized = symbol === code ? tick : { ...tick, symbol };

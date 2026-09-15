@@ -21,6 +21,7 @@ import type { MarketStream, OrderBookListener, OrderEventListener, TradeListener
 import { kstToday } from "../broker.js";
 import type { OrderBookLevel, OrderBookTick, OrderEvent, OrderEventType, OrderSide, TradeTick } from "../models.js";
 import { symbolCode } from "../models.js";
+import type { BrokerUsage } from "../telemetry.js";
 import { ReconnectingWebSocket, kstDateTime } from "../stream.js";
 
 export const KIWOOM_TYPE_TRADE = "0B";
@@ -28,6 +29,8 @@ export const KIWOOM_TYPE_ORDER_BOOK = "0D";
 export const KIWOOM_TYPE_ORDER_EVENTS = "00";
 
 export interface KiwoomStreamOptions {
+  /** 사용량 텔레메트리 핸들 (어댑터가 넘긴다) */
+  usage?: BrokerUsage;
   wsUrl: string;
   /** 접속마다 호출 — REST 접근토큰 (만료 시 갱신된다) */
   token: () => Promise<string>;
@@ -41,7 +44,7 @@ export class KiwoomMarketStream extends ReconnectingWebSocket implements MarketS
   private loggedIn = false;
 
   constructor(private readonly options: KiwoomStreamOptions) {
-    super("kiwoom");
+    super("kiwoom", 30_000, 90_000, 0, options.usage);
   }
 
   get isConnected(): boolean { return this.isSocketOpen && this.loggedIn; }
@@ -58,16 +61,19 @@ export class KiwoomMarketStream extends ReconnectingWebSocket implements MarketS
 
   subscribeTrades(symbols: string[], listener: TradeListener): void {
     const newCodes = this.register(symbols, listener, this.tradeListeners);
+    this.options.usage?.streamSubscribed("TRADES", newCodes.length);
     if (newCodes.length > 0 && this.isConnected) this.send(this.registerMessage(newCodes, KIWOOM_TYPE_TRADE));
   }
 
   subscribeOrderBook(symbols: string[], listener: OrderBookListener): void {
     const newCodes = this.register(symbols, listener, this.bookListeners);
+    this.options.usage?.streamSubscribed("ORDER_BOOK", newCodes.length);
     if (newCodes.length > 0 && this.isConnected) this.send(this.registerMessage(newCodes, KIWOOM_TYPE_ORDER_BOOK));
   }
 
   subscribeOrderEvents(listener: OrderEventListener): void {
     const first = this.orderListeners.length === 0;
+    if (first) this.options.usage?.streamSubscribed("ORDER_EVENTS");
     this.orderListeners.push(listener);
     if (first && this.isConnected) this.send(this.registerMessage([""], KIWOOM_TYPE_ORDER_EVENTS));
   }
@@ -118,6 +124,7 @@ export class KiwoomMarketStream extends ReconnectingWebSocket implements MarketS
         for (const tick of parseKiwoomReal(node)) this.deliver(tick, this.tradeListeners, "리스너");
         for (const tick of parseKiwoomOrderBook(node)) this.deliver(tick, this.bookListeners, "호가 리스너");
         for (const event of parseKiwoomOrderEvents(node)) {
+          this.options.usage?.streamMessage("ORDER_EVENTS");
           for (const l of this.orderListeners) {
             try { l(event); } catch (e) { console.error(`ERROR hermetix kiwoom stream: 주문 통보 리스너 오류 / ${event.orderId}: ${e}`); }
           }
@@ -129,6 +136,7 @@ export class KiwoomMarketStream extends ReconnectingWebSocket implements MarketS
   }
 
   private deliver<T extends { symbol: string }>(tick: T, target: Map<string, ((t: T) => void)[]>, label: string): void {
+    this.options.usage?.streamMessage((target as unknown) === (this.tradeListeners as unknown) ? "TRADES" : "ORDER_BOOK");
     const code = tick.symbol;
     const symbol = this.requestedSymbols.get(code) ?? code;
     const normalized = symbol === code ? tick : { ...tick, symbol };

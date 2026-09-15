@@ -10,6 +10,7 @@
  * - 초당 5회 한도 → 250ms 쓰로틀 + 429(IGW4290x, Retry-After) 재시도
  * 미확인(실측 필요): mkt_orr_no 와 itg_orr_no 의 동일 여부, ost_cns_dit 코드 의미, 등락률·수익률 단위(% 추정), 응답 숫자 타입
  */
+import { instrumentBroker, type BrokerUsage } from "../telemetry.js";
 import { Decimal } from "decimal.js";
 import { MarketStream, RateLimiter, StreamingBrokerClient, httpJson, krxCalendar, krxTickRound, kstYyyymmdd } from "../broker.js";
 import {
@@ -60,6 +61,8 @@ export class NhClient implements StreamingBrokerClient {
   static readonly PAPER_WS_URL = "wss://moapi.nhplug.com:17070/websocket";
   static readonly LIVE_WS_URL = "wss://api.nhplug.com:7070/websocket";
 
+  /** 사용량 텔레메트리 핸들 — 생성자 끝에서 공개 메서드를 계측하며 만든다 (docs/telemetry.md) */
+  private readonly usage: BrokerUsage;
   readonly capabilities: BrokerCapabilities = {
     brokerId: "nh", market: "KRX", currency: "KRW",
     candleIntervals: new Set<CandleInterval>(["1d"]),
@@ -92,6 +95,7 @@ export class NhClient implements StreamingBrokerClient {
     this.baseUrl = baseUrl || (environment === "LIVE" ? NhClient.LIVE_URL : NhClient.PAPER_URL);
     this.wsUrl = wsUrl || (environment === "LIVE" ? NhClient.LIVE_WS_URL : NhClient.PAPER_WS_URL);
     this.limiter = new RateLimiter(throttleMs, 3, (attempt) => 1000 * attempt);
+      this.usage = instrumentBroker(this);
   }
 
   // ---------------------------------------------------------------- market
@@ -218,7 +222,7 @@ export class NhClient implements StreamingBrokerClient {
 
   /** 웹소켓은 REST 접근토큰을 매 메시지 헤더에 싣는다. 채널은 marketCd(KRX oc/ob, NXT nc/nb, UNT mc/mb) 로 고른다 */
   openStream(): MarketStream {
-    return new NhMarketStream({ wsUrl: this.wsUrl, token: () => this.getToken(), marketCd: this.marketCd, accountNo: this.accountNo });
+    return new NhMarketStream({ usage: this.usage, wsUrl: this.wsUrl, token: () => this.getToken(), marketCd: this.marketCd, accountNo: this.accountNo });
   }
 
   // -------------------------------------------------------------- internal
@@ -297,6 +301,7 @@ export class NhClient implements StreamingBrokerClient {
   }
 
   private async getToken(): Promise<string> {
+    return this.usage.measure("auth", async () => {
     if (this.token && Date.now() < this.tokenExpiresAt - 300_000) return this.token;
     await this.limiter.throttle.wait();
     // SDK 규약: 파라미터는 쿼리스트링, 본문 없음, content-type 은 form-urlencoded
@@ -311,5 +316,6 @@ export class NhClient implements StreamingBrokerClient {
     this.token = body.access_token;
     this.tokenExpiresAt = Date.now() + Number(body.expires_in ?? 86400) * 1000;
     return this.token;
+    });
   }
 }
