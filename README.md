@@ -61,10 +61,10 @@ Hermetix 는 **국내외 증권사 오픈 API** 를 하나의 `BrokerClient` 인
 
 | 언어 | 폴더 | 버전 | 의존성 | 설치 |
 |---|---|---|---|---|
-| Kotlin/JVM (레퍼런스) | `kotlin/` | 0.10.0 | Spring Boot | JitPack (아래) |
-| [Python](python/) | `python/` | 0.10.0 | 0개 (stdlib, 3.10+) · 실시간은 `websockets` 선택 설치 | `pip install hermetix` (실시간: `pip install 'hermetix[stream]'`) |
-| [JavaScript/TypeScript](js/) | `js/` | 0.10.0 | decimal.js (Node 22+, 실시간은 내장 WebSocket) | `npm install hermetix` |
-| [Go](go/) | `go/` | 0.10.0 (태그 `go/v0.10.0`) | shopspring/decimal · 웹소켓 라이브러리 1개 | `go get github.com/tauthdev/hermetix-trading-core/go@v0.10.0` |
+| Kotlin/JVM (레퍼런스) | `kotlin/` | 0.11.0 | Spring Boot | JitPack (아래) |
+| [Python](python/) | `python/` | 0.11.0 | 0개 (stdlib, 3.10+) · 실시간은 `websockets` 선택 설치 | `pip install hermetix` (실시간: `pip install 'hermetix[stream]'`) |
+| [JavaScript/TypeScript](js/) | `js/` | 0.11.0 | decimal.js (Node 22+, 실시간은 내장 WebSocket) | `npm install hermetix` |
+| [Go](go/) | `go/` | 0.11.0 (태그 `go/v0.11.0`) | shopspring/decimal · 웹소켓 라이브러리 1개 | `go get github.com/tauthdev/hermetix-trading-core/go@v0.11.0` |
 
 네 언어 모두 한 줄 설치입니다. 언어별 사용설명서: [Python](python/README.md) · [JavaScript/TypeScript](js/README.md) · [Go](go/README.md). Kotlin 은 이 문서와 [전략 작성 가이드](docs/strategy-guide.md)가 설명서입니다.
 
@@ -80,10 +80,10 @@ repositories {
 // build.gradle.kts
 dependencies {
     // 전략 봇: engine (연결 계층이 함께 딸려옴)
-    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.10.0")
+    implementation("com.github.tauthdev.hermetix-trading-core:hermetix-engine:0.11.0")
 
     // 봇 없이 연결 계층만 (시세 수집, 대시보드, 알림봇 등):
-    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.10.0")
+    // implementation("com.github.tauthdev.hermetix-trading-core:hermetix-broker:0.11.0")
 }
 ```
 
@@ -347,6 +347,7 @@ hermetix:
 
 | 버전 | 내용 |
 |---|---|
+| 0.11.0 | 사용량 텔레메트리 수신 엔드포인트 확정 — `https://hermetix-api-prod.tripleauth.com/v1/usage` (hermetix-service, AWS ECS) |
 | 0.10.0 | nh·db·ls·toss 실시간 스트림(문서 기반), KB 는 웹소켓 없음 확정. **네 언어 한 줄 설치** — PyPI·npm 등록, Go `go/v0.10.0` 태그 |
 | 0.9.0 | 호가·주문통보 채널, `StrategySpec.orderBook`, 브라켓·KIS 추적에 통보 반영 |
 | 0.8.0 | 실시간 계층 1차 — `MarketStream` SPI, KIS·키움 체결가(모의 실측), `TickTrigger.ON_TRADE` |
