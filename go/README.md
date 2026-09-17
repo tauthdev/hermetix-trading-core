@@ -17,6 +17,9 @@ import (
     "github.com/shopspring/decimal"
     hermetix "github.com/tauthdev/hermetix-trading-core/go"
 )
+
+// 브로커 ID 한 토큰만 바꾸면 증권사가 바뀝니다 (docs/broker-factory.md)
+client, err := hermetix.Next(hermetix.Credentials{APIKey: "pk_test_…", APISecret: "sk_test_…", Account: "acc_main"})
 ```
 
 모노레포의 `go/` 하위 모듈이라 태그가 `go/v0.11.0` 형식입니다. 패키지 이름은 `hermetix` 로 별칭을 두는 것을 권장합니다.
@@ -81,7 +84,13 @@ NEXT_CLIENT_ID=pk_test_... NEXT_CLIENT_SECRET=sk_test_... go run .
 봇 없이 시세 수집·대시보드·알림용으로 `BrokerClient` 만 써도 됩니다. 모든 어댑터가 같은 메서드를 제공합니다.
 
 ```go
-broker := hermetix.NewKisClient(os.Getenv("KIS_APPKEY"), os.Getenv("KIS_APPSECRET"), os.Getenv("KIS_CANO"))
+// 자격 증명은 모든 브로커가 같은 모양 — APIKey / APISecret / Account (+ Environment, Extra). 증권사를 바꾸려면 Kis → Kiwoom 처럼 함수 이름만 바꿉니다
+broker, err := hermetix.Kis(hermetix.Credentials{APIKey: os.Getenv("KIS_APPKEY"), APISecret: os.Getenv("KIS_APPSECRET"), Account: os.Getenv("KIS_CANO")})
+if err != nil {
+    panic(err) // 필수 값 누락, 모르는 Extra 키, PAPER/LIVE 외 환경
+}
+// ID 문자열로 고르려면: broker, err := hermetix.Client("kis", creds)   (반환은 BrokerClient 인터페이스)
+// 기존 생성자 hermetix.NewKisClient(appkey, appsecret, cano) 와 Set* 체이닝도 그대로 됩니다
 
 quotes, err := broker.GetQuotes([]string{"005930", "000660"})
 if err != nil {

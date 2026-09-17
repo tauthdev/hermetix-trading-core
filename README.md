@@ -212,7 +212,25 @@ hermetix:
 
 ## 빠른 시작 — 연결 계층만
 
-봇이 필요 없다면 `hermetix-broker` 만으로 통일 API 를 사용할 수 있습니다. Spring 컨테이너도 필요 없습니다:
+봇이 필요 없다면 연결 계층만으로 통일 API 를 사용할 수 있습니다. 증권사는 **브로커 ID 한 토큰**으로 고릅니다 — ccxt 의 `ccxt.binance(...)` 와 같은 모양이고, 자격 증명 키(`api_key`·`api_secret`·`account`)는 어느 브로커든 같습니다 ([규약](docs/broker-factory.md)):
+
+```python
+import hermetix
+client = hermetix.next(api_key="pk_test_…", api_secret="sk_test_…", account="acc_main")
+quote = client.get_quotes(["005930"])[0]
+```
+```ts
+import hermetix from "hermetix";
+const client = hermetix.next({ apiKey: "pk_test_…", apiSecret: "sk_test_…", account: "acc_main" });
+```
+```go
+client, err := hermetix.Next(hermetix.Credentials{APIKey: "pk_test_…", APISecret: "sk_test_…", Account: "acc_main"})
+```
+```kotlin
+val client = Hermetix.next(Credentials(apiKey = "pk_test_…", apiSecret = "sk_test_…", account = "acc_main"))
+```
+
+`next` 를 `kis` 로 바꾸면 한국투자증권입니다. 브로커별 클래스를 직접 만들어도 됩니다 (Spring 컨테이너 불필요):
 
 ```kotlin
 val broker: BrokerClient = KisApiClient(
@@ -347,7 +365,7 @@ hermetix:
 
 | 버전 | 내용 |
 |---|---|
-| 0.11.0 | 사용량 텔레메트리 수신 엔드포인트 확정 — `https://hermetix-api-prod.tripleauth.com/v1/usage` (hermetix-service, AWS ECS) |
+| 0.11.0 | **브로커 팩토리** `hermetix.next(...)` — 브로커 ID 한 토큰과 통일된 자격 증명으로 생성 ([규약](docs/broker-factory.md)). 사용량 텔레메트리 수신 엔드포인트 확정 — `https://hermetix-api-prod.tripleauth.com/v1/usage` (hermetix-service, AWS ECS) |
 | 0.10.0 | nh·db·ls·toss 실시간 스트림(문서 기반), KB 는 웹소켓 없음 확정. **네 언어 한 줄 설치** — PyPI·npm 등록, Go `go/v0.10.0` 태그 |
 | 0.9.0 | 호가·주문통보 채널, `StrategySpec.orderBook`, 브라켓·KIS 추적에 통보 반영 |
 | 0.8.0 | 실시간 계층 1차 — `MarketStream` SPI, KIS·키움 체결가(모의 실측), `TickTrigger.ON_TRADE` |
@@ -359,6 +377,7 @@ hermetix:
 ## 문서
 
 - 언어별 사용설명서 — [Python](python/README.md) · [JavaScript/TypeScript](js/README.md) · [Go](go/README.md)
+- [브로커 팩토리 규약](docs/broker-factory.md) — `hermetix.next(...)` 생성 규약, 통일된 자격 증명 키와 브로커별 `extra`
 - [전략 작성 가이드](docs/strategy-guide.md) — SPI 레퍼런스(Kotlin), 패턴, 안전장치, 테스트, 트러블슈팅
 - [아키텍처](docs/architecture.md) — 모듈 구조, 틱 파이프라인, 거래 환경·RiskGuard·심볼 규약, 어댑터 비교표, 상태 지도
 - [컨포먼스 킷](conformance/README.md) — 새 어댑터 검증 시나리오와 네 언어 공용 골든 픽스처

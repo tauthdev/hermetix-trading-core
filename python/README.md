@@ -21,6 +21,33 @@ pip install 'hermetix[stream]'       # + 웹소켓 실시간 스트림 (websocke
 pip install -e './python[dev]'       # 저장소를 클론해 개발할 때 (pytest 포함)
 ```
 
+## 브로커 고르기 — `hermetix.next(...)`
+
+ccxt 의 `ccxt.binance(...)` 처럼 **브로커 ID 한 토큰만 바꾸면** 증권사가 바뀝니다. 자격 증명은 어느 브로커든 `api_key`·`api_secret`·`account`·`environment` 네 가지 모양이고, 브로커별 선택 항목은 키워드 인자(`extra`)로 넘깁니다. 규약은 [docs/broker-factory.md](../docs/broker-factory.md).
+
+```python
+import hermetix
+
+client = hermetix.next(api_key="pk_test_...", api_secret="sk_test_...", account="acc_main")
+client = hermetix.kis(api_key=..., api_secret=..., account="12345678", hts_id="my-hts-id")  # 주문 통보용 hts_id 는 extra
+client = hermetix.kiwoom(api_key=..., api_secret=..., environment="LIVE")
+client = hermetix.client("toss", api_key=..., api_secret=..., account="1")                  # ID 문자열로 고를 때
+hermetix.brokers   # ('next', 'kis', 'kiwoom', 'nh', 'ls', 'db', 'toss', 'kb')
+```
+
+| 브로커 | `account` | extra |
+|---|---|---|
+| next | account_id (기본 `acc_main`) | `base_url` |
+| kis | cano (필수) | `acnt_prdt_cd` `custtype` `hts_id` `base_url` `ws_url` `throttle_seconds` |
+| kiwoom | — | `base_url` `ws_url` `throttle_seconds` |
+| nh | account_no | `auth_url` `market_cd` `order_market_cd` + 공통 |
+| ls | — | `mac_address` `exch_gubun` `chart_throttle_seconds` + 공통 |
+| db | — | `mac_address` `market_div_code` + 공통 |
+| toss | account_seq | 공통 |
+| kb | — | `excg_clsf` `sor_order_ccd` `chart_market_clsf` `base_url` `throttle_seconds` |
+
+모르는 extra 키·빈 `api_key`/`api_secret`·kis 의 빈 `account` 는 `ValueError` 입니다. 기존 클래스 직접 생성(`KisClient(appkey=..., appsecret=..., cano=...)`)도 그대로 됩니다.
+
 ## 5분 빠른 시작 — 전략 봇
 
 전략은 `Strategy` 를 상속해 `spec` 과 `decide()` 만 채우면 됩니다. 엔진이 정규장 중에만 주기적으로 스냅샷을 만들어 `decide()` 를 부르고, 돌려준 시그널을 주문으로 바꿉니다. 익절·손절은 `Buy` 에 가격만 적으면 엔진이 대신 청산합니다.
@@ -29,7 +56,8 @@ pip install -e './python[dev]'       # 저장소를 클론해 개발할 때 (pyt
 import os
 from decimal import Decimal
 
-from hermetix import Buy, CandleInterval, KisClient, Strategy, StrategyEngine, StrategySpec
+import hermetix
+from hermetix import Buy, CandleInterval, Strategy, StrategyEngine, StrategySpec
 
 
 class Ma20Strategy(Strategy):
@@ -55,8 +83,8 @@ class Ma20Strategy(Strategy):
         return []
 
 
-broker = KisClient(appkey=os.environ["KIS_APPKEY"], appsecret=os.environ["KIS_APPSECRET"],
-                   cano=os.environ["KIS_CANO"])                        # 한국투자증권 모의투자 (기본)
+broker = hermetix.kis(api_key=os.environ["KIS_APPKEY"], api_secret=os.environ["KIS_APPSECRET"],
+                      account=os.environ["KIS_CANO"])                   # 모의투자 기본. kis → next/kiwoom/… 만 바꾸면 증권사 전환
 StrategyEngine(broker, [Ma20Strategy()]).run()                         # 블로킹 루프, Ctrl+C 로 종료
 ```
 
@@ -73,9 +101,11 @@ StrategyEngine(broker, [Ma20Strategy()]).run()                         # 블로�
 import os
 from decimal import Decimal
 
-from hermetix import CandleInterval, CreateOrderRequest, KiwoomClient, OrderSide, OrderType
+import hermetix
+from hermetix import CandleInterval, CreateOrderRequest, OrderSide, OrderType
 
-client = KiwoomClient(appkey=os.environ["KIWOOM_APPKEY"], secretkey=os.environ["KIWOOM_SECRETKEY"])
+client = hermetix.kiwoom(api_key=os.environ["KIWOOM_APPKEY"], api_secret=os.environ["KIWOOM_SECRETKEY"])
+# 다른 증권사는 kiwoom → kis / next / nh / ls / db / toss / kb 만 바꾼다. 기존 KiwoomClient(appkey=..., secretkey=...) 도 된다
 
 quote = client.get_quotes(["005930"])[0]                       # Quote: price, bid_price, ask_price, volume, change_rate
 candles = client.get_candles("005930", CandleInterval.DAY_1, limit=30)   # 과거 → 최신

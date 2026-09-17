@@ -26,7 +26,7 @@ npm run build               # tsc → dist/
 전략은 `Strategy` 인터페이스 하나입니다. `spec` 으로 감시 종목과 호출 주기를 선언하고, `decide` 에서 시그널을 돌려주면 주문 제출·익절/손절·비상정지는 엔진이 맡습니다.
 
 ```ts
-import { Decimal, KisClient, StrategyEngine, buy } from "hermetix";
+import hermetix, { Decimal, StrategyEngine, buy } from "hermetix";
 import type { Signal, Strategy, StrategyContext, StrategySpec } from "hermetix";
 
 class MyFirstStrategy implements Strategy {
@@ -56,23 +56,23 @@ class MyFirstStrategy implements Strategy {
   }
 }
 
-const broker = new KisClient(process.env.KIS_APPKEY!, process.env.KIS_APPSECRET!, process.env.KIS_CANO!);
+const broker = hermetix.kis({ apiKey: process.env.KIS_APPKEY!, apiSecret: process.env.KIS_APPSECRET!, account: process.env.KIS_CANO! });
 await new StrategyEngine(broker, [new MyFirstStrategy()]).run();   // Ctrl+C 로 종료
 ```
 
 - 키는 환경변수로 넣으세요. 키는 항상 당신의 기기에서만 쓰이고, Hermetix 는 어떤 서버로도 키를 보내지 않습니다
 - `run()` 은 블로킹 루프입니다. 기동 시 브로커 환경(모의/실전)과 전략의 캔들 주기 지원 여부를 검사해 어긋나면 그 전략은 스케줄하지 않고 로그로 알립니다
-- 브로커 전환은 클라이언트 교체 한 줄입니다 (`new NextClient(...)`, `new KiwoomClient(...)`). 전략 코드는 그대로입니다
+- 브로커 전환은 브로커 ID 한 토큰입니다 (`hermetix.next({...})`, `hermetix.kiwoom({...})`). 자격 증명은 모든 브로커가 `{ apiKey, apiSecret, account?, environment? }` 한 모양이고 브로커별 선택 항목은 `hts_id` 같은 snake_case 키로 함께 넘깁니다 — 표는 [docs/broker-factory.md](../docs/broker-factory.md). 전략 코드는 그대로입니다
 - 시그널: `buy(symbol, qty, opts)` / `sell(symbol, qty, opts)` / `cancel(orderId)`. `sell` 은 보유 수량으로 자동 클램프됩니다(공매도 방지). `decide` 는 `Promise<Signal[]>` 을 돌려줘도 됩니다
 
 ## 연결 계층만 쓰기
 
-봇 없이 시세 수집·대시보드·알림에 브로커 클라이언트만 쓸 수 있습니다. 8개 어댑터가 같은 `BrokerClient` 를 구현합니다.
+봇 없이 시세 수집·대시보드·알림에 브로커 클라이언트만 쓸 수 있습니다. 8개 어댑터가 같은 `BrokerClient` 를 구현합니다. `hermetix.<브로커>({...})` 로 만들고, 설정값으로 고르려면 `client("kiwoom", {...})` 를 씁니다. 기존처럼 `new KiwoomClient(appkey, secretkey)` 로 직접 만들어도 됩니다.
 
 ```ts
-import { Decimal, KiwoomClient, pnlReport } from "hermetix";
+import hermetix, { Decimal, pnlReport } from "hermetix";
 
-const client = new KiwoomClient(process.env.KIWOOM_APPKEY!, process.env.KIWOOM_SECRETKEY!);
+const client = hermetix.kiwoom({ apiKey: process.env.KIWOOM_APPKEY!, apiSecret: process.env.KIWOOM_SECRETKEY! });
 
 const [quote] = await client.getQuotes(["005930"]);
 console.log(quote.price.toString(), quote.changeRate?.toString());        // 등락률은 비율 (-0.0347 = -3.47%)
@@ -145,7 +145,7 @@ kis·kiwoom·nh·db·ls·toss 는 웹소켓 스트림(`StreamingBrokerClient`)�
 `spec.trigger = "ON_TRADE"` 로 선언하면 체결 틱마다 전략을 호출합니다. 전략 코드는 바뀌지 않습니다.
 
 ```ts
-import { KisClient, StrategyEngine } from "hermetix";
+import hermetix, { StrategyEngine } from "hermetix";
 import type { Signal, Strategy, StrategyContext, StrategySpec } from "hermetix";
 
 class ScalpStrategy implements Strategy {
@@ -162,7 +162,7 @@ class ScalpStrategy implements Strategy {
   }
 }
 
-const broker = new KisClient(process.env.KIS_APPKEY!, process.env.KIS_APPSECRET!, process.env.KIS_CANO!);
+const broker = hermetix.kis({ apiKey: process.env.KIS_APPKEY!, apiSecret: process.env.KIS_APPSECRET!, account: process.env.KIS_CANO! });
 await new StrategyEngine(broker, [new ScalpStrategy()]).run();
 ```
 

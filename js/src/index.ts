@@ -22,9 +22,12 @@
  *   const broker = new NextClient("pk_test_...", "sk_test_...");
  *   await new StrategyEngine(broker, [strategy]).run();
  *
- * 브로커 전환은 클라이언트 교체 한 줄:
- *   new KisClient(appkey, appsecret, cano)   // 한국투자 모의 (KRX)
- *   new KiwoomClient(appkey, secretkey)      // 키움 모의 (KRX)
+ * 브로커 전환은 브로커 ID 한 토큰 (docs/broker-factory.md):
+ *   import hermetix from "hermetix";
+ *   hermetix.next({ apiKey, apiSecret, account: "acc_main" })   // 넥스트 (미국주식)
+ *   hermetix.kis({ apiKey, apiSecret, account: cano })          // 한국투자 모의 (KRX)
+ *   hermetix.kiwoom({ apiKey, apiSecret })                      // 키움 모의 (KRX)
+ * 기존 클래스(new KisClient(...))도 그대로 쓸 수 있다.
  */
 export { Decimal } from "./models.js";
 export type {
@@ -66,3 +69,6 @@ export {
   BracketMonitor, MarketCalendar, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard, pnlReport,
 } from "./engine.js";
 export type { EngineOptions, PnlReport } from "./engine.js";
+export { brokers, client, db, hermetix, kb, kis, kiwoom, ls, next, nh, toss } from "./factory.js";
+export type { BrokerId, Credentials } from "./factory.js";
+export { hermetix as default } from "./factory.js";

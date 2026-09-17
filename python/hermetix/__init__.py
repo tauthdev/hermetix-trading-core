@@ -19,10 +19,16 @@
     broker = NextClient(client_id="pk_test_...", client_secret="sk_test_...")
     StrategyEngine(broker, [MyStrategy()]).run()
 
-브로커 전환은 클라이언트 교체 한 줄:
+브로커 전환은 브로커 ID 한 토큰 (docs/broker-factory.md — 네 언어 공통 규약):
 
-    broker = KisClient(appkey=..., appsecret=..., cano=...)      # 한국투자 모의
-    broker = KiwoomClient(appkey=..., secretkey=...)             # 키움 모의
+    import hermetix
+    broker = hermetix.next(api_key="pk_test_...", api_secret="sk_test_...", account="acc_main")
+    broker = hermetix.kis(api_key=..., api_secret=..., account=...)   # 한국투자 모의
+    broker = hermetix.kiwoom(api_key=..., api_secret=...)             # 키움 모의
+    broker = hermetix.client("toss", api_key=..., api_secret=..., account=...)
+
+기존 클래스 직접 생성(KisClient(appkey=..., appsecret=..., cano=...))도 그대로 된다.
+``hermetix.next`` 는 내장 ``next`` 와 이름이 같으니 ``from hermetix import next`` 대신 ``hermetix.next(...)`` 로 쓴다.
 """
 from .broker import (BrokerClient, MarketStream, OrderBookListener, OrderEventListener, RateLimiter, StreamingBrokerClient,
                      TradeListener)
@@ -42,6 +48,9 @@ from .brokers.ls_stream import LsMarketStream
 from .brokers.nh_stream import NhMarketStream
 from .brokers.toss_stream import TossMarketStream
 from .engine import BracketMonitor, MarketCalendar, OrderExecutor, RiskGuard, StrategyEngine, TradingGuard, pnl_report
+from . import factory as _factory
+from .factory import brokers, client, db, kb, kis, kiwoom, ls, nh, toss
+next = _factory.next  # noqa: A001 — 브로커 ID 가 곧 함수 이름 (hermetix.next 로 쓴다)
 from .errors import (
     AuthError, BrokerApiError, InsufficientFundsError, InvalidOrderError,
     MarketClosedError, OrderNotFoundError, RateLimitError,
@@ -57,6 +66,7 @@ from .strategy import Buy, Cancel, Sell, Signal, Strategy, StrategyContext, Stra
 __version__ = "0.11.0"
 
 __all__ = [
+    "brokers", "client", "next", "kis", "kiwoom", "nh", "ls", "db", "toss", "kb",
     "BrokerClient", "RateLimiter", "MarketStream", "StreamingBrokerClient", "TradeListener", "NextClient", "KisClient", "KiwoomClient", "NhClient", "DbClient",
     "LsClient", "TossClient", "KbClient",
     "ConformanceReport", "ConformanceScenario", "verify_broker_conformance",
